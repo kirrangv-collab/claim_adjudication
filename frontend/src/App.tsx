@@ -518,7 +518,7 @@ function App() {
                       </span>
                     </div>
                   </div>
-                  <div className="callout"><Info size={16} /><p>{config?.llm_enabled ? "The B3-style LLM/RAG engine is a from-scratch reimplementation, not the original research code, and is a secondary comparison signal only — see Case review." : "Provide the original repository and frozen benchmark to enable valid reproduction and comparison of B1/B2. Configure CAF_MODEL_* to enable a comparison-only B3-style LLM/RAG engine."}</p></div>
+                  <div className="callout"><Info size={16} /><p>{config?.llm_enabled ? "The B3-style LLM/RAG engine is a from-scratch reimplementation, not the original research code, and is a secondary comparison signal only — see Case review." : "Provide the original repository and frozen benchmark to enable valid reproduction and comparison of B1/B2. Configure CAF_MODEL_API_KEY (a Google Gemini API key) to enable a comparison-only B3-style LLM/RAG engine."}</p></div>
                 </section>
                 <section className="panel">
                   <PanelHeading icon={<ShieldCheck size={17} />} tone="green" title="Readiness checklist" subtitle="Requirements before any operational pilot" />

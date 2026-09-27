@@ -27,6 +27,10 @@ services:
       CLAIMLAB_ENVIRONMENT: production
       CLAIMLAB_DATABASE_URL: postgresql+psycopg://claimlab:${CLAIMLAB_DB_PASSWORD:?Set CLAIMLAB_DB_PASSWORD}@db:5432/claimlab
       CLAIMLAB_JWT_SECRET_KEY: ${CLAIMLAB_JWT_SECRET_KEY:?Set CLAIMLAB_JWT_SECRET_KEY to a strong, unique value before running compose}
+      # Optional LLM/RAG comparison engine (Google Gemini). Omit the key to
+      # leave it disabled; the rest default to Gemini 2.5 Flash in code.
+      CAF_MODEL_API_KEY: ${CAF_MODEL_API_KEY:-}
+      CAF_MODEL_ANALYSIS: ${CAF_MODEL_ANALYSIS:-gemini-2.5-flash}
     ports:
       - "127.0.0.1:8000:8000"
     read_only: true

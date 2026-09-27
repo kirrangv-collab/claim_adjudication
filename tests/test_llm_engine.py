@@ -27,9 +27,31 @@ def _case(**overrides) -> InferenceCase:
 
 
 class _FakeResponse:
-    def __init__(self, content: str, status_code: int = 200):
+    """Mimics an httpx response carrying a Gemini generateContent body."""
+
+    def __init__(
+        self,
+        content: str,
+        status_code: int = 200,
+        *,
+        finish_reason: str = "STOP",
+        parts: list[dict] | None = None,
+    ):
         self._content = content
         self.status_code = status_code
+        self._payload = {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": parts
+                        if parts is not None
+                        else [{"text": content}],
+                    },
+                    "finishReason": finish_reason,
+                }
+            ]
+        }
 
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -39,7 +61,7 @@ class _FakeResponse:
             )
 
     def json(self):
-        return {"choices": [{"message": {"content": self._content}}]}
+        return self._payload
 
 
 class _FakeAsyncClient:
@@ -61,10 +83,12 @@ class _FakeAsyncClient:
 
 @pytest.fixture(autouse=True)
 def _configured_env(monkeypatch):
-    monkeypatch.setenv("CAF_MODEL_PROVIDER", "vllm")
-    monkeypatch.setenv("CAF_MODEL_BASE_URL", "https://example-test-host/v1")
+    monkeypatch.setenv("CAF_MODEL_PROVIDER", "gemini")
+    monkeypatch.setenv(
+        "CAF_MODEL_BASE_URL", "https://generativelanguage.googleapis.com/v1beta"
+    )
     monkeypatch.setenv("CAF_MODEL_API_KEY", "test-key-not-real")
-    monkeypatch.setenv("CAF_MODEL_ANALYSIS", "test-model")
+    monkeypatch.setenv("CAF_MODEL_ANALYSIS", "gemini-2.5-flash")
     monkeypatch.setattr(llm_engine, "_RETRY_BACKOFF_SECONDS", 0)
 
 
@@ -161,3 +185,108 @@ async def test_unsupported_decision_label_is_rejected(monkeypatch):
 
     assert result.decision is None
     assert result.error is not None
+
+
+async def test_request_uses_gemini_url_key_header_and_disables_thinking(monkeypatch):
+    """Pin the wire contract: x-goog-api-key, :generateContent path, thinking off."""
+    captured: dict = {}
+    good = (
+        '{"decision": "APPROVE", "confidence": 0.9, "rationale": "ok", '
+        '"supporting_quotes": []}'
+    )
+
+    class _RecordingClient(_FakeAsyncClient):
+        async def post(self, url, **kwargs):
+            captured["url"] = url
+            captured["headers"] = kwargs.get("headers", {})
+            captured["json"] = kwargs.get("json", {})
+            return await super().post(url, **kwargs)
+
+    monkeypatch.setattr(
+        llm_engine.httpx, "AsyncClient", lambda *a, **kw: _RecordingClient([_FakeResponse(good)])
+    )
+
+    await llm_engine.run_llm_rag_adjudication(_case())
+
+    assert captured["url"] == (
+        "https://generativelanguage.googleapis.com/v1beta"
+        "/models/gemini-2.5-flash:generateContent"
+    )
+    assert captured["headers"]["x-goog-api-key"] == "test-key-not-real"
+    assert "Authorization" not in captured["headers"]
+
+    config = captured["json"]["generationConfig"]
+    assert config["thinkingConfig"] == {"thinkingBudget": 0}
+    assert config["responseMimeType"] == "application/json"
+    assert config["responseSchema"]["properties"]["decision"]["enum"] == [
+        "APPROVE",
+        "DENY",
+        "HUMAN_REVIEW",
+    ]
+    # The prompt is a systemInstruction, not a "role" in contents.
+    assert "systemInstruction" in captured["json"]
+    assert captured["json"]["contents"][0]["role"] == "user"
+
+
+async def test_safety_block_is_disclosed_not_treated_as_a_decision(monkeypatch):
+    blocked = _FakeResponse("")
+    blocked._payload = {"promptFeedback": {"blockReason": "SAFETY"}}
+    _queue_responses(monkeypatch, blocked, blocked)
+
+    result = await llm_engine.run_llm_rag_adjudication(_case())
+
+    assert result.decision is None
+    assert "blockReason=SAFETY" in result.error
+
+
+async def test_max_tokens_finish_reason_is_disclosed(monkeypatch):
+    truncated = _FakeResponse("", finish_reason="MAX_TOKENS")
+    _queue_responses(monkeypatch, truncated, truncated)
+
+    result = await llm_engine.run_llm_rag_adjudication(_case())
+
+    assert result.decision is None
+    assert "finishReason=MAX_TOKENS" in result.error
+
+
+async def test_missing_candidates_is_disclosed(monkeypatch):
+    empty = _FakeResponse("")
+    empty._payload = {}
+    _queue_responses(monkeypatch, empty, empty)
+
+    result = await llm_engine.run_llm_rag_adjudication(_case())
+
+    assert result.decision is None
+    assert "no candidates" in result.error
+
+
+async def test_thought_parts_are_not_parsed_as_the_answer(monkeypatch):
+    """A thought trace must not be fed to the JSON parser as model output."""
+    payload = (
+        '{"decision": "DENY", "confidence": 0.4, "rationale": "Excluded.", '
+        '"supporting_quotes": []}'
+    )
+    response = _FakeResponse(
+        "",
+        parts=[
+            {"text": "I should consider the exclusion clause...", "thought": True},
+            {"text": payload, "thought": False},
+        ],
+    )
+    _queue_responses(monkeypatch, response)
+
+    result = await llm_engine.run_llm_rag_adjudication(_case())
+
+    assert result.decision == "DENY"
+    assert result.error is None
+
+
+async def test_defaults_allow_enabling_with_only_an_api_key(monkeypatch):
+    """provider/base URL/model are optional; one key must be enough."""
+    for var in ("CAF_MODEL_PROVIDER", "CAF_MODEL_BASE_URL", "CAF_MODEL_ANALYSIS"):
+        monkeypatch.delenv(var, raising=False)
+
+    summary = llm_engine.llm_config_summary()
+    assert summary["provider"] == llm_engine.DEFAULT_PROVIDER
+    assert summary["analysis_model"] == llm_engine.DEFAULT_MODEL
+    assert summary["endpoint_host"] == "generativelanguage.googleapis.com"

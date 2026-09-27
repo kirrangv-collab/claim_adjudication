@@ -3,7 +3,6 @@
 These monkeypatch the required CAF_MODEL_* environment variables and stub
 out backend.llm_engine.run_llm_rag_adjudication so the suite stays hermetic
 (no real network calls). They verify:
-
 * /api/v1/config discloses the engine only when actually configured, and
   never leaks the API key.
 * /api/v1/adjudications attaches a secondary llm_result without changing
@@ -14,6 +13,8 @@ out backend.llm_engine.run_llm_rag_adjudication so the suite stays hermetic
 The real, opt-in, network-calling check lives in
 tests/test_live_llm_engine.py.
 """
+import json
+
 import pytest
 
 from backend import main, reviews
@@ -35,16 +36,18 @@ def _case(**overrides):
 
 @pytest.fixture
 def configured_llm_env(monkeypatch):
-    monkeypatch.setenv("CAF_MODEL_PROVIDER", "vllm")
-    monkeypatch.setenv("CAF_MODEL_BASE_URL", "https://example-test-host/v1")
+    monkeypatch.setenv("CAF_MODEL_PROVIDER", "gemini")
+    monkeypatch.setenv(
+        "CAF_MODEL_BASE_URL", "https://generativelanguage.googleapis.com/v1beta"
+    )
     monkeypatch.setenv("CAF_MODEL_API_KEY", "test-key-not-real")
-    monkeypatch.setenv("CAF_MODEL_ANALYSIS", "test-model")
+    monkeypatch.setenv("CAF_MODEL_ANALYSIS", "gemini-2.5-flash")
 
 
 def _fake_llm_result(**overrides) -> LLMEngineResult:
     data = {
         "engine": "llm_rag",
-        "model": "test-model",
+        "model": "gemini-2.5-flash",
         "decision": "APPROVE",
         "rationale": "Coverage and evidence align in the submitted text.",
         "confidence": 0.8,
@@ -76,10 +79,25 @@ def test_config_discloses_llm_details_without_leaking_the_key(client, configured
     response = client.get("/api/v1/config")
     body = response.json()
     assert body["llm_enabled"] is True
-    assert body["llm_provider"] == "vllm"
-    assert body["llm_analysis_model"] == "test-model"
-    assert body["llm_endpoint_host"] == "example-test-host"
+    assert body["llm_provider"] == "gemini"
+    assert body["llm_analysis_model"] == "gemini-2.5-flash"
+    assert body["llm_endpoint_host"] == "generativelanguage.googleapis.com"
     assert "test-key-not-real" not in response.text
+
+
+def test_config_reports_gemini_defaults_with_only_an_api_key(client, monkeypatch):
+    """A single key is enough to enable the engine; the rest default to Gemini."""
+    for var in ("CAF_MODEL_PROVIDER", "CAF_MODEL_BASE_URL", "CAF_MODEL_ANALYSIS"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("CAF_MODEL_API_KEY", "test-key-not-real")
+
+    body = client.get("/api/v1/config").json()
+
+    assert body["llm_enabled"] is True
+    assert body["llm_provider"] == "gemini"
+    assert body["llm_analysis_model"] == "gemini-2.5-flash"
+    assert body["llm_endpoint_host"] == "generativelanguage.googleapis.com"
+    assert "test-key-not-real" not in json.dumps(body)
 
 
 async def _fake_run(case):

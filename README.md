@@ -8,7 +8,7 @@ This build adds a production-grade engineering layer — authentication, a datab
 
 - React/TypeScript workbench with Case Review (stateless preview), Evaluation, **Review queue** (authenticated, persisted, audited), and Model & Data views; Python FastAPI API with JWT auth, PostgreSQL/SQLite persistence via SQLAlchemy + Alembic migrations, and per-IP rate limiting.
 - The primary adjudication output uses deterministic lexical rules; no LLM controls or changes that result.
-- **Optional second engine (LLM/RAG)**: when a server operator configures `CAF_MODEL_*` (see below), every case is *also* run through a from-scratch LLM/RAG reasoning engine (`backend/llm_engine.py`), and both results are shown side by side. This is a from-scratch reimplementation of the project brief's "B3: Single LLM/RAG" idea, not the original research code. It is a **secondary, comparison-only signal**: it never overrides the deterministic result, is never persisted as the authoritative decision, and a disagreement between the two engines is surfaced explicitly to the reviewer rather than silently resolved. See "The LLM/RAG comparison engine" below for the honest, measured behavior of this engine (including its failure modes).
+- **Optional second engine (LLM/RAG)**: when a server operator supplies a Google Gemini API key via `CAF_MODEL_API_KEY` (see below), every case is *also* run through a from-scratch LLM/RAG reasoning engine (`backend/llm_engine.py`, Gemini 2.5 Flash), and both results are shown side by side. This is a from-scratch reimplementation of the project brief's "B3: Single LLM/RAG" idea, not the original research code. It is a **secondary, comparison-only signal**: it never overrides the deterministic result, is never persisted as the authoritative decision, and a disagreement between the two engines is surfaced explicitly to the reviewer rather than silently resolved. See "The LLM/RAG comparison engine" below for the honest, measured behavior of this engine (including its failure modes).
 - **Review queue**: submitting a case creates a permanent, audited `CaseReview` row (prototype suggestion + inputs, plus the LLM/RAG signal when configured). A human reviewer records the authoritative `APPROVED` / `DENIED` / `ESCALATED` decision separately. A basic maker-checker control blocks the case's own creator from also recording its decision (unless they are an admin); decisions are immutable once recorded, and only an admin can reopen a case. See "Authentication and the review workflow" below.
 - Three deterministic processing stages (policy interpretation, evidence assessment, reconciliation) with a traceable output.
 - Inference requests reject extra fields, including evaluation labels. Evaluation labels are kept in a separate wrapper and never passed into inference.
@@ -32,26 +32,35 @@ Review-queue endpoints (`/api/v1/reviews*`) all require a valid token. `POST /ap
 
 ### The LLM/RAG comparison engine
 
-Disabled by default. Set all four of these on the backend process to enable it:
+Disabled by default. Set a Google Gemini API key on the backend process to enable it — one variable is all that's required, the rest default to Gemini:
 
 ```powershell
-$env:CAF_MODEL_PROVIDER = "vllm"
-$env:CAF_MODEL_BASE_URL = "https://your-approved-vllm-host/v1"
-$env:CAF_MODEL_API_KEY = "..."          # bearer token; never logged, returned, or committed
-$env:CAF_MODEL_ANALYSIS = "your-model-id"   # the actual model id, not a catalog alias
+$env:CAF_MODEL_API_KEY = "..."   # Gemini API key; never logged, returned, or committed
 python -m uvicorn backend.main:app
 ```
 
+Optional overrides (the defaults are what you'd normally use):
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `CAF_MODEL_API_KEY` | *(none)* | **Required.** Gemini API key, sent as the `x-goog-api-key` header. |
+| `CAF_MODEL_PROVIDER` | `gemini` | Disclosure only; surfaced via `/api/v1/config`. |
+| `CAF_MODEL_BASE_URL` | `https://generativelanguage.googleapis.com/v1beta` | The model id is appended as `/models/{model}:generateContent`. |
+| `CAF_MODEL_ANALYSIS` | `gemini-2.5-flash` | Model id to call. Must be a **2.5-series** Flash model — see the thinking note below. |
+
+The engine calls Gemini's native `generateContent` REST endpoint directly over `httpx` (already a dependency), so no new packages and no SDK lock-in. Structured output is enforced with `responseMimeType="application/json"` plus a `responseSchema`, so the model returns schema-valid JSON rather than being merely *asked* for JSON.
+
 Design and safety properties (see [`backend/llm_engine.py`](backend/llm_engine.py) for the implementation):
 
-- **Bounded retries only** (2 attempts). If both fail — network error, HTTP error, or a response that doesn't parse into the expected JSON shape — the engine returns `decision: null` with a disclosed `error` string. It never silently substitutes a specific decision for a failure.
+- **Bounded retries only** (2 attempts). If both fail — network error, HTTP error, a Gemini safety block, or a response that doesn't parse into the expected JSON shape — the engine returns `decision: null` with a disclosed `error` string. It never silently substitutes a specific decision for a failure.
 - **Quote verification**: the model is asked to quote the exact policy sentence(s) supporting its answer. Each quote is checked against the submitted policy text and flagged `verified_in_policy_text: false` if it doesn't literally appear there, so a hallucinated quote is visible rather than silently trusted.
-- **No retrieval/browsing**: the engine only ever sees the policy text and evidence submitted with that one case — nothing else.
-- **`temperature=0` and a fixed `seed`** are sent to reduce (not eliminate) run-to-run variance. In practice, this vLLM/Nemotron deployment can still return a *different* decision for an identical request between calls — this was observed directly during testing and is disclosed rather than hidden, because it is itself a reason this must stay a secondary, human-reviewed signal rather than an authority.
+- **No retrieval/browsing**: the engine only ever sees the policy text and evidence submitted with that one case — nothing else. Gemini grounding/retrieval is deliberately not enabled.
+- **Safety blocks and truncation are surfaced, never guessed at.** A `promptFeedback.blockReason`, an empty candidate list, or a `finishReason` other than `STOP` (notably `MAX_TOKENS`) is recorded as a disclosed engine error rather than silently read as a decision.
+- **`temperature=0` only** is sent to reduce (not eliminate) run-to-run variance. Gemini's `generateContent` API has **no `seed` parameter**, so the fixed seed used in the previous vLLM configuration is gone; variance reduction is weaker than it was, and a different decision for an identical request between calls remains possible. That is disclosed rather than hidden, because it is itself a reason this must stay a secondary, human-reviewed signal rather than an authority.
 
-**Endpoint compatibility notes (verified in this workspace):** the vLLM gateway's `/v1/models` catalog exposes only an `all-team-models` alias, and chat requests through that alias return HTTP 400 — use the actual model id (e.g. `nemotron3-super-120b`) directly. The model is a reasoning ("thinking") model: without `extra_body: {"chat_template_kwargs": {"enable_thinking": false}}` it can spend its entire token budget on a hidden reasoning trace and return empty `content`.
+**Thinking-budget note (why 2.5 and not 3.x):** Gemini 2.5 models think by default, and `maxOutputTokens` is a *combined* budget covering thought tokens **and** output tokens. Left alone, a reasoning trace can consume the whole budget, and the call returns `finishReason=MAX_TOKENS` with an empty body while still billing for the thought tokens. The engine pins `thinkingConfig.thinkingBudget` to `0` so the 1024-token cap applies to the answer only. Gemini 3.x Flash **cannot fully disable thinking at all**, so this is an intentional pin to the 2.5 series — moving to a 3.x model id requires reworking the budget (and Google's 3.x guidance is to leave `temperature` at its default rather than 0). This is the same class of failure the previous vLLM deployment hit, so the same guard applies.
 
-**Measured comparison (real CMS policy dataset, 10 cases, live model calls):** run against the real-policy sample described below, the deterministic engine and the LLM/RAG engine both scored **7/10** against the project-authored `ground_truth` labels — but they did not make the *same* seven correct calls. The two engines disagreed on roughly half of the 10 cases, each catching mistakes the other made. This is exactly the argument for showing both signals and flagging disagreement rather than trusting either engine alone; see `tests/test_live_llm_engine.py` for a repeatable, opt-in, real-network check (skipped automatically unless `CAF_MODEL_*` is configured, so CI never depends on network access or credentials).
+**Measured comparison (real CMS policy dataset, 10 cases, live model calls):** run against the real-policy sample described below, the deterministic engine and the LLM/RAG engine both scored **7/10** against the project-authored `ground_truth` labels — but they did not make the *same* seven correct calls. The two engines disagreed on roughly half of the 10 cases, each catching mistakes the other made. This is exactly the argument for showing both signals and flagging disagreement rather than trusting either engine alone. **That measurement was taken against the previous vLLM/Nemotron deployment, not Gemini** — treat the 7/10 as a property of that earlier engine and re-run the comparison if you need a current number; see `tests/test_live_llm_engine.py` for a repeatable, opt-in, real-network check (skipped automatically unless `CAF_MODEL_API_KEY` is set, so CI never depends on network access or credentials).
 
 ## Run locally
 
@@ -140,7 +149,7 @@ From the project root:
 python -m pytest
 ```
 
-This runs the deterministic-adjudicator, security, rate-limit, auth/review-workflow, real-policy-dataset, and LLM/RAG-engine tests (39 tests, hermetic — no network calls) against an isolated, auto-created SQLite database (see `tests/conftest.py` — never the local `data/claimlab.db`). One additional live test in `tests/test_live_llm_engine.py` is skipped automatically unless `CAF_MODEL_PROVIDER`, `CAF_MODEL_BASE_URL`, `CAF_MODEL_API_KEY`, and `CAF_MODEL_ANALYSIS` are set — it makes one real network call to the configured model with synthetic text only, so CI never depends on network access or credentials.
+This runs the deterministic-adjudicator, security, rate-limit, auth/review-workflow, real-policy-dataset, and LLM/RAG-engine tests (46 tests, hermetic — no network calls) against an isolated, auto-created SQLite database (see `tests/conftest.py` — never the local `data/claimlab.db`). One additional live test in `tests/test_live_llm_engine.py` is skipped automatically unless `CAF_MODEL_API_KEY` is set — it makes one real network call to Gemini with synthetic text only, so CI never depends on network access or credentials.
 
 ## Next integration step
 
