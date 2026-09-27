@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.py[cod]
+frontend/node_modules/
+frontend/dist/
+frontend/tsconfig.tsbuildinfo
+data/*.db
+data/*.db-journal
+ci-migration-check.db
+.env

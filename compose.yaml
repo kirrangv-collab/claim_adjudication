@@ -1,0 +1,60 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: claimlab
+      POSTGRES_USER: claimlab
+      POSTGRES_PASSWORD: ${CLAIMLAB_DB_PASSWORD:?Set CLAIMLAB_DB_PASSWORD in your environment or a .env file before running compose}
+    volumes:
+      - claimlab-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U claimlab -d claimlab"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      CLAIMLAB_ALLOWED_ORIGINS: http://localhost:8080,http://127.0.0.1:8080
+      CLAIMLAB_ENVIRONMENT: production
+      CLAIMLAB_DATABASE_URL: postgresql+psycopg://claimlab:${CLAIMLAB_DB_PASSWORD:?Set CLAIMLAB_DB_PASSWORD}@db:5432/claimlab
+      CLAIMLAB_JWT_SECRET_KEY: ${CLAIMLAB_JWT_SECRET_KEY:?Set CLAIMLAB_JWT_SECRET_KEY to a strong, unique value before running compose}
+    ports:
+      - "127.0.0.1:8000:8000"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  web:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8080:8080"
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:uid=101,gid=101,mode=0755
+      - /var/run:uid=101,gid=101,mode=0755
+      - /tmp:uid=101,gid=101,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  claimlab-db-data:
