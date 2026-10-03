@@ -30,7 +30,7 @@ services:
       # Optional LLM/RAG comparison engine (Google Gemini). Omit the key to
       # leave it disabled; the rest default to Gemini 2.5 Flash in code.
       CAF_MODEL_API_KEY: ${CAF_MODEL_API_KEY:-}
-      CAF_MODEL_ANALYSIS: ${CAF_MODEL_ANALYSIS:-gemini-2.5-flash}
+      CAF_MODEL_ANALYSIS: ${CAF_MODEL_ANALYSIS:-gemini-3.8-flash}
     ports:
       - "127.0.0.1:8000:8000"
     read_only: true

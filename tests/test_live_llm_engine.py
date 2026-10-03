@@ -7,9 +7,12 @@ on network access or credentials. Everything else defaults to Gemini
     $env:CAF_MODEL_API_KEY = "..."
     python -m pytest tests/test_live_llm_engine.py -v
 
-To target a different 2.5-series model, also set:
+To target a different Flash model, also set:
 
-    $env:CAF_MODEL_ANALYSIS = "gemini-2.5-flash"
+    $env:CAF_MODEL_ANALYSIS = "gemini-flash-latest"
+
+The id must accept ``thinkingBudget: 0``; a model that rejects it fails
+with HTTP 400 (see the thinking note in ``backend/llm_engine.py``).
 
 This makes exactly one real network call with synthetic, non-sensitive
 text, and asserts only on the *shape* of a real response (a real decision

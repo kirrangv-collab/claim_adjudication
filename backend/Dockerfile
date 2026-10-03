@@ -11,6 +11,8 @@ RUN pip install --no-cache-dir --no-compile .
 COPY backend ./backend
 COPY alembic ./alembic
 COPY alembic.ini ./alembic.ini
+COPY scripts ./scripts
+COPY data/processed ./data/processed
 RUN chmod +x ./backend/docker-entrypoint.sh
 USER 10001:10001
 EXPOSE 8000

@@ -23,15 +23,24 @@ Design constraints (deliberate, and load-bearing for the safety story):
 Gemini-specific notes (these replace the previous vLLM-oriented behaviour and
 are worth reading before changing the request payload):
 
-* ``thinkingBudget`` is pinned to ``0``. Gemini 2.5 models think by default,
-  and ``maxOutputTokens`` is a *combined* budget covering thought tokens and
-  output tokens. Without this, a "reasoning" trace can consume the entire
-  budget and the call returns ``finishReason=MAX_TOKENS`` with an empty
-  response — while still billing for the thought tokens. Pinning the budget
-  to 0 keeps ``maxOutputTokens`` meaningful as an output-only cap.
-  Caveat: Gemini 3.x Flash cannot fully disable thinking at all, so this
-  engine is intentionally pinned to the 2.5 series. Moving to a 3.x Flash id
-  requires reworking this budget and raising ``maxOutputTokens``.
+* ``thinkingBudget`` is pinned to ``0``. Gemini Flash models think by
+  default, and ``maxOutputTokens`` is a *combined* budget covering thought
+  tokens and output tokens. Without this, a "reasoning" trace can consume
+  the entire budget and the call returns ``finishReason=MAX_TOKENS`` with an
+  empty response — while still billing for the thought tokens. Pinning the
+  budget to 0 keeps ``maxOutputTokens`` meaningful as an output-only cap.
+  Support for ``thinkingBudget`` is *per model id*, not per series: as of
+  this writing ``gemini-3.8-flash`` and ``gemini-flash-latest`` accept and
+  honour ``thinkingBudget: 0`` (verified: zero thought parts,
+  ``finishReason=STOP``), while ``gemini-3.5-flash-lite`` rejects it with
+  HTTP 400. Re-verify this before changing the pinned id rather than
+  assuming a whole series behaves uniformly.
+* The previous default, ``gemini-2.5-flash``, now returns HTTP 404
+  ("no longer available to new users") for newly issued keys, so it is no
+  longer a usable default. Gemini also retires model ids over time, so a
+  pinned id can break again; ``gemini-flash-latest`` tracks the current
+  Flash release but changes behaviour when Google updates it, so the pinned
+  version id is kept as the default for reproducibility.
 * ``responseMimeType="application/json"`` plus ``responseSchema`` make Gemini
   return schema-valid JSON directly, instead of relying on the model to
   honour "respond with ONLY a JSON object". The response is still parsed
@@ -56,8 +65,8 @@ supplying one key:
     CAF_MODEL_PROVIDER   defaults to "gemini" (disclosure only)
     CAF_MODEL_BASE_URL   defaults to the Gemini v1beta REST base; the model id
                          is appended as "/models/{model}:generateContent"
-    CAF_MODEL_ANALYSIS   defaults to "gemini-2.5-flash"; set a 2.5-series
-                         model id to override
+    CAF_MODEL_ANALYSIS   defaults to "gemini-3.8-flash"; set a Flash model id
+                         that accepts ``thinkingBudget: 0`` to override
 """
 from __future__ import annotations
 
@@ -77,7 +86,7 @@ _RETRY_BACKOFF_SECONDS = 0.5
 
 DEFAULT_PROVIDER = "gemini"
 DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
-DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_MODEL = "gemini-3.8-flash"
 
 # Thinking is pinned off so maxOutputTokens caps output only; see the module
 # docstring. 1024 leaves headroom for verbatim policy quotes, which the

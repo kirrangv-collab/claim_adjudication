@@ -17,7 +17,7 @@ import json
 
 import pytest
 
-from backend import main, reviews
+from backend import llm_engine, main, reviews
 from backend.schemas import LLMEngineResult
 
 
@@ -95,7 +95,7 @@ def test_config_reports_gemini_defaults_with_only_an_api_key(client, monkeypatch
 
     assert body["llm_enabled"] is True
     assert body["llm_provider"] == "gemini"
-    assert body["llm_analysis_model"] == "gemini-2.5-flash"
+    assert body["llm_analysis_model"] == llm_engine.DEFAULT_MODEL
     assert body["llm_endpoint_host"] == "generativelanguage.googleapis.com"
     assert "test-key-not-real" not in json.dumps(body)
 
