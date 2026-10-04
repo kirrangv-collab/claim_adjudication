@@ -347,14 +347,6 @@ function App() {
         </header>
 
         <div className="page">
-          {(view === "adjudication" || view === "review") && (
-            <div className="global-warning" role="note">
-              <div className="warning-symbol"><ShieldAlert size={17} /></div>
-              <div><strong>Not for real-world claim decisions</strong><span>This research interface uses deterministic text rules—not a validated model. A qualified human must independently review all outcomes.</span></div>
-              <span className="warning-tag">NOT PRODUCTION</span>
-            </div>
-          )}
-
           {error && <div className="error-banner" role="alert"><CircleAlert size={17} /><span>{error}</span></div>}
 
           {apiReady === false && (
