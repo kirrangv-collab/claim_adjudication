@@ -303,16 +303,23 @@ Make sure you're logged in as **alice**. Go to **Review queue** →
   the decision form reappears (now re-decidable by any eligible reviewer,
   including admin).
 
-### 4.6 — Admin may both create and decide a case (exempt from segregation of duties)
+### 4.6 — Admin self-review: backend allows it, the UI currently does not expose it
 - [ ] While logged in as **admin**, submit a new case for review (any inputs
   — e.g. reuse the DMARD example from 2.4, Evidence completeness
   `Incomplete / missing information`).
   **Expected:** case created, suggestion = `HUMAN_REVIEW`.
-- [ ] On that same case (still logged in as admin), the decision form **is**
-  shown immediately (no segregation-of-duties block), because admins are
-  exempt. Select **Escalated for further review**, add a note, and click
-  **Record final decision**.
-  **Expected:** succeeds immediately — *"ESCALATED by admin on …"*.
+- [ ] On that same case (still logged in as admin), look at what's shown.
+  **Expected (actual UI behavior):** the UI shows the same **"Segregation of
+  duties"** notice as it would for a regular reviewer — admin does **not**
+  get the decision form here, even though the backend API itself *does*
+  permit an admin to record a decision on their own case (confirmed via a
+  direct API call: `POST /api/v1/reviews/{id}/decision` as the admin who
+  created the case returns `200`, not `403`). This is a known **frontend
+  gap, not a backend bug**: [`ReviewQueue.tsx`](frontend/src/ReviewQueue.tsx)
+  computes `isOwnCase` from username only (`detail.created_by ===
+  currentUsername`) and never checks `role`, so the admin exemption that
+  exists server-side is invisible in the UI. Don't expect to see a decision
+  form here until this is fixed — if you do see one, something changed.
 
 ### 4.7 — Escalation path + queue filters
 - [ ] Go back to the **Review queue** list (not the detail view). Click
@@ -381,7 +388,7 @@ Log back in (any account) and go to **Model & data**.
 | 1 | Login | bad creds, good creds, session persistence, sign out |
 | 2 | Case review | APPROVE, DENY-missed-by-rules, conflicting evidence, incomplete evidence, policy qualifier, negated evidence, empty-field validation, XSS safety, LLM agreement/disagreement |
 | 3 | Evaluation | CMS sample (70% acc.), malformed JSONL rejection, custom 3-class set (100% acc.) |
-| 4 | Review queue | submit, segregation of duties, cross-reviewer decision, immutability, admin-only reopen, admin self-review exemption, escalation, filters, auth gate |
+| 4 | Review queue | submit, segregation of duties, cross-reviewer decision, immutability, admin-only reopen, admin self-review (backend allows, UI currently blocks — known gap), escalation, filters, auth gate |
 | 5 | Model & data | config card, dataset card, baselines card, readiness checklist |
 | 6 | Session | expiry redirect |
 
