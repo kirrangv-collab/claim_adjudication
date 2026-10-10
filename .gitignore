@@ -10,5 +10,6 @@ frontend/dist/
 frontend/tsconfig.tsbuildinfo
 data/*.db
 data/*.db-journal
+data/*.pem
 ci-migration-check.db
 .env
