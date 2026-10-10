@@ -72,9 +72,11 @@ async function readError(response: Response) {
 export function ReviewQueue({
   authFetch,
   currentUsername,
+  currentRole,
 }: {
   authFetch: (path: string, init?: RequestInit) => Promise<Response>;
   currentUsername: string;
+  currentRole: string;
 }) {
   const [mode, setMode] = useState<"list" | "new" | "detail">("list");
   const [statusFilter, setStatusFilter] = useState<"" | "pending_review" | "reviewed">("");
@@ -180,7 +182,10 @@ export function ReviewQueue({
     }
   }
 
-  const isOwnCase = detail?.created_by === currentUsername;
+  // Mirrors the backend's segregation-of-duties check (backend/reviews.py):
+  // the creator is blocked from deciding their own case unless they are an
+  // admin, who is explicitly exempt.
+  const isOwnCase = detail?.created_by === currentUsername && currentRole !== "admin";
 
   return (
     <section className="review-queue">

@@ -451,7 +451,7 @@ function App() {
           {view === "review" && (
             <>
               <PageHeading eyebrow="AUDITED HUMAN REVIEW" title="Review queue" subtitle="Every submitted case is persisted with an audit trail. A different reviewer must record the final decision before it counts as anything but a suggestion." />
-              <ReviewQueue authFetch={authFetch} currentUsername={session.username} />
+              <ReviewQueue authFetch={authFetch} currentUsername={session.username} currentRole={session.role} />
             </>
           )}
 
