@@ -22,7 +22,7 @@ x-hardened: &hardened
 services:
   caddy:
     <<: *hardened
-    image: caddy:2.8-alpine
+    image: caddy:2.11-alpine
     depends_on:
       web:
         condition: service_healthy
