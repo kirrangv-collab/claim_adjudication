@@ -17,7 +17,7 @@ services:
 
   qdrant:
     # Vector store for Agents 2/3 (ontology-term and reference-corpus embeddings).
-    image: qdrant/qdrant:v1.12.4
+    image: qdrant/qdrant:v1.20.0
     volumes:
       - claimlab-qdrant-data:/qdrant/storage
     healthcheck:
