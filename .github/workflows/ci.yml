@@ -23,6 +23,8 @@ jobs:
       - run: ruff check backend tests scripts
       - run: python -m alembic upgrade head
       - run: python -m pytest
+      # Knowledge-layer seeding with the default in-process backends.
+      - run: python scripts/load_knowledge_base.py
 
   frontend:
     runs-on: ubuntu-latest

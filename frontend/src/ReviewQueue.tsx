@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import {
   ArrowLeft, CircleAlert, ClipboardCheck, FilePlus2, LoaderCircle,
-  Lock, RefreshCw, ShieldAlert, ShieldCheck, UserCheck,
+  Lock, RefreshCw, ShieldAlert, ShieldCheck, UserCheck, Zap,
 } from "lucide-react";
+import { PipelineTraceView, RouteBanner } from "./PipelineView";
+import type { Decision, PipelineTrace, Route } from "./pipeline";
 
-type Decision = "APPROVE" | "DENY" | "HUMAN_REVIEW";
+type ReviewStatus = "pending_review" | "reviewed" | "auto_decided";
 type HumanDecision = "APPROVED" | "DENIED" | "ESCALATED";
 
 type CaseInput = {
@@ -37,7 +39,10 @@ type ReviewSummary = {
   suggested_decision: Decision;
   suggested_confidence: number;
   llm_decision: Decision | null;
-  status: "pending_review" | "reviewed";
+  route: Route | null;
+  status: ReviewStatus;
+  final_decision: Decision | null;
+  decision_source: "stp" | "human" | null;
   created_by: string;
   created_at: string;
   human_decision: HumanDecision | null;
@@ -51,7 +56,15 @@ type ReviewDetail = ReviewSummary & {
   findings: Finding[];
   limitations: string[];
   human_notes: string | null;
+  audit_brief: string | null;
+  pipeline: PipelineTrace | null;
   llm_result: LLMResult | null;
+};
+
+const STATUS_LABEL: Record<ReviewStatus, string> = {
+  pending_review: "Pending review",
+  reviewed: "Reviewed",
+  auto_decided: "Auto-decided (STP)",
 };
 
 type ListResponse = { items: ReviewSummary[]; total: number; page: number; page_size: number };
@@ -79,7 +92,7 @@ export function ReviewQueue({
   currentRole: string;
 }) {
   const [mode, setMode] = useState<"list" | "new" | "detail">("list");
-  const [statusFilter, setStatusFilter] = useState<"" | "pending_review" | "reviewed">("");
+  const [statusFilter, setStatusFilter] = useState<"" | ReviewStatus>("");
   const [list, setList] = useState<ListResponse | null>(null);
   const [detail, setDetail] = useState<ReviewDetail | null>(null);
   const [form, setForm] = useState<CaseInput>(emptyCase);
@@ -201,13 +214,13 @@ export function ReviewQueue({
         <>
           <div className="queue-toolbar">
             <div className="queue-filters">
-              {(["", "pending_review", "reviewed"] as const).map((value) => (
+              {(["", "pending_review", "auto_decided", "reviewed"] as const).map((value) => (
                 <button
                   key={value || "all"}
                   className={`filter-chip ${statusFilter === value ? "active" : ""}`}
                   onClick={() => setStatusFilter(value)}
                 >
-                  {value === "" ? "All" : value === "pending_review" ? "Pending" : "Reviewed"}
+                  {value === "" ? "All" : value === "pending_review" ? "Human queue" : value === "auto_decided" ? "Straight-through" : "Reviewed"}
                 </button>
               ))}
             </div>
@@ -232,18 +245,18 @@ export function ReviewQueue({
           ) : (
             <div className="queue-table">
               <div className="queue-row queue-head">
-                <span>Case</span><span>Suggested</span><span>LLM signal</span><span>Status</span><span>Created by</span><span>Decision</span>
+                <span>Case</span><span>Draft · confidence</span><span>LLM signal</span><span>Status</span><span>Created by</span><span>Final decision</span>
               </div>
               {list.items.map((item) => (
                 <button className="queue-row queue-item" key={item.id} onClick={() => void openDetail(item.id)}>
                   <span>#{item.id}{item.case_id ? ` · ${item.case_id}` : ""}</span>
-                  <span className={`pill signal-${item.suggested_decision.toLowerCase()}`}>{item.suggested_decision.replace("_", " ")}</span>
+                  <span className={`pill signal-${item.suggested_decision.toLowerCase()}`}>{item.suggested_decision.replace("_", " ")} · {item.suggested_confidence.toFixed(2)}</span>
                   <span className={item.llm_decision ? `pill signal-${item.llm_decision.toLowerCase()} ${item.llm_decision !== item.suggested_decision ? "signal-disagree" : ""}` : "pill signal-none"}>
                     {item.llm_decision ? item.llm_decision.replace("_", " ") : "—"}
                   </span>
-                  <span className={`pill status-${item.status}`}>{item.status === "pending_review" ? "Pending" : "Reviewed"}</span>
+                  <span className={`pill status-${item.status}`}>{item.status === "auto_decided" && <Zap size={10} />}{STATUS_LABEL[item.status]}</span>
                   <span>{item.created_by}</span>
-                  <span>{item.human_decision ?? "—"}</span>
+                  <span>{item.final_decision ? `${item.final_decision.replace("_", " ")} (${item.decision_source === "stp" ? "STP" : "human"})` : item.human_decision ?? "—"}</span>
                 </button>
               ))}
             </div>
@@ -255,8 +268,11 @@ export function ReviewQueue({
         <form className="panel case-card" onSubmit={submitNewCase}>
           <div className="panel-heading">
             <span className="section-icon blue"><FilePlus2 size={17} /></span>
-            <div className="panel-heading-copy"><h2>Submit a case for review</h2><p>This creates a permanent, audited record. It is not a final decision until a different reviewer signs off.</p></div>
+            <div className="panel-heading-copy"><h2>Submit a case</h2><p>Runs the five-agent pipeline and creates a permanent, audited record. High-confidence drafts are finalised by straight-through processing; all others enter the human queue for a different reviewer.</p></div>
           </div>
+          <label className="field"><span className="field-label">Case reference</span>
+            <input maxLength={100} value={form.case_id ?? ""} onChange={(e) => setForm((f) => ({ ...f, case_id: e.target.value || undefined }))} placeholder="Optional, e.g. claim-2026-001" />
+          </label>
           <div className="field-row">
             <label className="field"><span className="field-label">Diagnosis<i>Required</i></span>
               <input required maxLength={500} value={form.diagnosis} onChange={(e) => setForm((f) => ({ ...f, diagnosis: e.target.value }))} />
@@ -280,7 +296,7 @@ export function ReviewQueue({
           </label>
           <button className="button primary" type="submit" disabled={busy !== null}>
             {busy === "create" ? <LoaderCircle className="spin" size={16} /> : <FilePlus2 size={16} />}
-            {busy === "create" ? "Submitting…" : "Submit for review"}
+            {busy === "create" ? "Running pipeline…" : "Submit case"}
           </button>
         </form>
       )}
@@ -290,11 +306,23 @@ export function ReviewQueue({
           <div className="panel-heading">
             <span className="section-icon violet"><ClipboardCheck size={17} /></span>
             <div className="panel-heading-copy"><h2>Case #{detail.id}{detail.case_id ? ` · ${detail.case_id}` : ""}</h2><p>Created by {detail.created_by}</p></div>
-            <span className={`pill status-${detail.status}`}>{detail.status === "pending_review" ? "Pending review" : "Reviewed"}</span>
+            <span className={`pill status-${detail.status}`}>{STATUS_LABEL[detail.status]}</span>
           </div>
 
+          {detail.pipeline && detail.route && (
+            <RouteBanner
+              decision={detail.route === "STRAIGHT_THROUGH" ? detail.suggested_decision : "HUMAN_REVIEW"}
+              draft={detail.suggested_decision}
+              route={detail.route}
+              confidence={detail.suggested_confidence}
+              thresholds={detail.pipeline.confidence.thresholds}
+              reasons={detail.pipeline.confidence.abstention_reasons}
+              reopened={detail.route === "STRAIGHT_THROUGH" && detail.status !== "auto_decided"}
+            />
+          )}
+
           <div className={`decision ${detail.suggested_decision.toLowerCase()}`}>
-            <span className="decision-kicker">PROTOTYPE SUGGESTION — NOT A DECISION</span>
+            <span className="decision-kicker">{detail.status === "auto_decided" ? "PIPELINE DECISION — FINALISED BY STRAIGHT-THROUGH PROCESSING" : "PIPELINE DRAFT — A REVIEWER RECORDS THE DECISION"}</span>
             <strong>{detail.suggested_decision.replace("_", " ")}</strong>
             <p>{detail.suggested_rationale}</p>
           </div>
@@ -305,7 +333,7 @@ export function ReviewQueue({
               <strong>{detail.llm_result.decision ? detail.llm_result.decision.replace("_", " ") : "Unavailable"}</strong>
               <p>{detail.llm_result.decision ? detail.llm_result.rationale : (detail.llm_result.error ?? "The model did not return a usable result.")}</p>
               {detail.llm_result.decision && detail.llm_result.decision !== detail.suggested_decision && (
-                <p className="signal-disagree-note"><CircleAlert size={12} /> Disagrees with the rule-based suggestion above.</p>
+                <p className="signal-disagree-note"><CircleAlert size={12} /> Disagrees with the pipeline draft above.</p>
               )}
             </div>
           )}
@@ -317,7 +345,22 @@ export function ReviewQueue({
           <div className="detail-block"><strong>Policy text</strong><p>{detail.inference_case.policy_text}</p></div>
           <div className="detail-block"><strong>Clinical evidence</strong><p>{detail.inference_case.clinical_evidence}</p></div>
 
-          {detail.status === "reviewed" ? (
+          {detail.pipeline && (
+            <details className="detail-block trace-details">
+              <summary><strong>Agent trace &amp; audit brief</strong></summary>
+              <PipelineTraceView trace={detail.pipeline} />
+            </details>
+          )}
+
+          {detail.status === "auto_decided" ? (
+            <div className="human-decision-card stp-card">
+              <div className="human-decision-heading"><Zap size={17} /><strong>Finalised by straight-through processing</strong></div>
+              <p><b>{detail.final_decision}</b> — calibrated confidence {detail.suggested_confidence.toFixed(3)} met the threshold. No human decision is needed; an admin can reopen the case to send it to the human queue.</p>
+              <button className="button secondary" onClick={() => void reopenCase()} disabled={busy !== null}>
+                {busy === "reopen" ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />} Reopen for human review (admin only)
+              </button>
+            </div>
+          ) : detail.status === "reviewed" ? (
             <div className="human-decision-card">
               <div className="human-decision-heading"><UserCheck size={17} /><strong>Human decision recorded</strong></div>
               <p><b>{detail.human_decision}</b> by {detail.reviewed_by} on {detail.reviewed_at ? new Date(detail.reviewed_at).toLocaleString() : ""}</p>

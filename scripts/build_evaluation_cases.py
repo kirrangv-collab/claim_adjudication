@@ -232,6 +232,239 @@ def build_cases(sections: list[dict]) -> list[dict]:
             ),
         },
     ]
+    # Expansion set (v2). Ground truth for these cases was written from a
+    # literal reading of the cited section BEFORE the multi-agent pipeline
+    # was run on them, so they act as a semi-held-out check of the pipeline
+    # (the original 10 cases above were used while developing it).
+    cases += [
+        {
+            "case_id": "ncd-80.2-opt-occult-small-progressing",
+            "diagnosis": "neovascular age-related macular degeneration, occult subfoveal CNV with no classic component",
+            "requested_service": "ocular photodynamic therapy with verteporfin",
+            "policy_text": load_section(sections, "80.2"),
+            "clinical_evidence": (
+                "Synthetic vignette: fluorescein angiogram confirms an occult "
+                "subfoveal choroidal neovascular lesion with no classic "
+                "component. Lesion size is 3 disk areas at initial treatment, "
+                "and lesion growth was documented within the 3 months prior "
+                "to initial treatment."
+            ),
+            "evidence_state": "documented",
+            "ground_truth": "APPROVE",
+            "rationale_note": (
+                "Section 80.2.1(B) covers occult/no-classic subfoveal CNV with "
+                "verteporfin when the lesion is small (<=4 disk areas) AND has "
+                "documented progression (lesion growth qualifies); both are "
+                "documented. The older general non-coverage statement for "
+                "occult lesions is superseded by this narrower indication."
+            ),
+        },
+        {
+            "case_id": "ncd-80.3-verteporfin-dry-amd",
+            "diagnosis": "atrophic (dry) age-related macular degeneration",
+            "requested_service": "verteporfin with ocular photodynamic therapy",
+            "policy_text": load_section(sections, "80.3"),
+            "clinical_evidence": (
+                "Synthetic vignette: fundus examination documents geographic "
+                "atrophy consistent with dry age-related macular degeneration; "
+                "no choroidal neovascularization is present on fluorescein "
+                "angiogram."
+            ),
+            "evidence_state": "documented",
+            "ground_truth": "DENY",
+            "rationale_note": (
+                "Section 80.3 covers verteporfin for AMD only with neovascular "
+                "AMD and qualifying CNV lesions, and lists atrophic or dry AMD "
+                "as nationally non-covered."
+            ),
+        },
+        {
+            "case_id": "ncd-80.4-contact-lens-refractive-error",
+            "diagnosis": "myopia",
+            "requested_service": "hydrophilic contact lenses",
+            "policy_text": load_section(sections, "80.4"),
+            "clinical_evidence": (
+                "Synthetic vignette: healthy eyes with no ocular disease; the "
+                "patient requests soft hydrophilic contact lenses to correct "
+                "myopia."
+            ),
+            "evidence_state": "documented",
+            "ground_truth": "DENY",
+            "rationale_note": (
+                "Section 80.4: hydrophilic contact lenses are not covered when "
+                "used for non-diseased eyes with spherical ametropia (myopia)."
+            ),
+        },
+        {
+            "case_id": "ncd-80.4-contact-lens-aphakia",
+            "diagnosis": "aphakia",
+            "requested_service": "hydrophilic contact lens",
+            "policy_text": load_section(sections, "80.4"),
+            "clinical_evidence": (
+                "Synthetic vignette: the patient is aphakic following cataract "
+                "extraction; a hydrophilic contact lens is prescribed for the "
+                "aphakic eye."
+            ),
+            "evidence_state": "documented",
+            "ground_truth": "APPROVE",
+            "rationale_note": (
+                "Section 80.4: payment may be made under the prosthetic device "
+                "benefit for hydrophilic contact lenses prescribed for an "
+                "aphakic patient."
+            ),
+        },
+        {
+            "case_id": "ncd-80.5-scleral-shell-shrunken-eye",
+            "diagnosis": "atrophy of globe (phthisis bulbi)",
+            "requested_service": "scleral shell",
+            "policy_text": load_section(sections, "80.5"),
+            "clinical_evidence": (
+                "Synthetic vignette: the right eye has been rendered sightless "
+                "and shrunken by inflammatory disease; a scleral shell is "
+                "fitted to serve as an artificial eye and avoid enucleation."
+            ),
+            "evidence_state": "documented",
+            "ground_truth": "APPROVE",
+            "rationale_note": (
+                "Section 80.5: where an eye has been rendered sightless and "
+                "shrunken by inflammatory disease, payment may be made for a "
+                "scleral shell."
+            ),
+        },
+        {
+            "case_id": "ncd-80.6-photography-diabetic-retinopathy",
+            "diagnosis": "diabetic retinopathy",
+            "requested_service": "intraocular photography",
+            "policy_text": load_section(sections, "80.6"),
+            "clinical_evidence": (
+                "Synthetic vignette: the treating ophthalmologist documents "
+                "diabetic retinopathy and orders fundus photography to record "
+                "the retinal findings."
+            ),
+            "evidence_state": "documented",
+            "ground_truth": "APPROVE",
+            "rationale_note": (
+                "Section 80.6 covers intraocular photography for the diagnosis "
+                "of conditions such as diabetic retinopathy."
+            ),
+        },
+        {
+            "case_id": "ncd-80.10-phaco-cataract",
+            "diagnosis": "age-related cataract",
+            "requested_service": "phacoemulsification cataract extraction",
+            "policy_text": load_section(sections, "80.10"),
+            "clinical_evidence": (
+                "Synthetic vignette: a visually significant age-related "
+                "cataract is documented and phacoemulsification cataract "
+                "extraction is planned."
+            ),
+            "evidence_state": "documented",
+            "ground_truth": "APPROVE",
+            "rationale_note": (
+                "Section 80.10: reimbursement may be made for necessary "
+                "services in connection with cataract extraction utilizing "
+                "phaco-emulsification."
+            ),
+        },
+        {
+            "case_id": "ncd-80.7.1-ptk-corneal-scar",
+            "diagnosis": "corneal scar",
+            "requested_service": "phototherapeutic keratectomy",
+            "policy_text": load_section(sections, "80.7"),
+            "clinical_evidence": (
+                "Synthetic vignette: slit lamp examination documents a central "
+                "corneal scar in the visual axis; phototherapeutic keratectomy "
+                "is planned to remove the scar tissue. There is no refractive "
+                "indication."
+            ),
+            "evidence_state": "documented",
+            "ground_truth": "APPROVE",
+            "rationale_note": (
+                "Section 80.7.1: keratoplasty that treats specific lesions of "
+                "the cornea, such as phototherapeutic keratectomy removing scar "
+                "tissue, is not cosmetic and may be covered."
+            ),
+        },
+        {
+            "case_id": "ncd-80.9-perimetry-family-history-only",
+            "diagnosis": "family history of glaucoma",
+            "requested_service": "computer enhanced perimetry",
+            "policy_text": load_section(sections, "80.9"),
+            "clinical_evidence": (
+                "Chief complaint: routine eye examination. Exam: intraocular "
+                "pressure normal; optic nerves healthy; no visual field defect "
+                "noted. Family history: mother has primary open-angle glaucoma. "
+                "Assessment: no glaucoma or other neuropathologic defect "
+                "identified."
+            ),
+            "evidence_state": "documented",
+            "ground_truth": "HUMAN_REVIEW",
+            "rationale_note": (
+                "NOISY-NOTE CASE. Section 80.9 covers perimetry for patients "
+                "with glaucoma or other neuropathologic defects; glaucoma "
+                "appears only in the family history and the active assessment "
+                "finds none. There is no explicit exclusion, so escalation "
+                "rather than automatic denial is appropriate."
+            ),
+        },
+        {
+            "case_id": "ncd-80.9-perimetry-copy-forward-note",
+            "diagnosis": "primary open-angle glaucoma",
+            "requested_service": "computer enhanced perimetry",
+            "policy_text": load_section(sections, "80.9"),
+            "clinical_evidence": (
+                "Prior encounter (2024-02-11): routine refraction only; no "
+                "glaucoma. Encounter 2026-05-02: HPI: progressive visual field "
+                "loss. Assessment: primary open-angle glaucoma confirmed; "
+                "perimetry ordered to monitor the visual fields. Electronically "
+                "signed by the treating ophthalmologist."
+            ),
+            "evidence_state": "documented",
+            "ground_truth": "APPROVE",
+            "rationale_note": (
+                "NOISY-NOTE CASE. The 2024 'no glaucoma' statement belongs to "
+                "an earlier encounter; the active 2026 encounter documents "
+                "primary open-angle glaucoma, which section 80.9 covers."
+            ),
+        },
+        {
+            "case_id": "ncd-80.11-vitrectomy-conflicting-notes",
+            "diagnosis": "vitreous hemorrhage",
+            "requested_service": "vitrectomy",
+            "policy_text": load_section(sections, "80.11"),
+            "clinical_evidence": (
+                "Synthetic vignette: one note documents dense vitreous "
+                "hemorrhage; a later note from the same day states the "
+                "vitreous is clear."
+            ),
+            "evidence_state": "conflicting",
+            "ground_truth": "HUMAN_REVIEW",
+            "rationale_note": (
+                "Section 80.11 covers vitreous opacities due to hemorrhage, but "
+                "the evidence is explicitly conflicting and must be reconciled "
+                "by a reviewer."
+            ),
+        },
+        {
+            "case_id": "ncd-80.1-bandage-lens-cosmetic",
+            "diagnosis": "cosmetic preference, no corneal disease",
+            "requested_service": "hydrophilic contact lens",
+            "policy_text": load_section(sections, "80.1"),
+            "clinical_evidence": (
+                "Synthetic vignette: the patient requests a hydrophilic contact "
+                "lens for cosmetic reasons; slit lamp examination shows a "
+                "healthy cornea with no corneal pathology."
+            ),
+            "evidence_state": "documented",
+            "ground_truth": "HUMAN_REVIEW",
+            "rationale_note": (
+                "Section 80.1 describes hydrophilic lenses used as corneal "
+                "bandages for corneal pathology; this request has no such "
+                "pathology, but 80.1 contains no explicit exclusion (that is "
+                "in 80.4), so the conservative outcome is escalation."
+            ),
+        },
+    ]
     return cases
 
 

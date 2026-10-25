@@ -56,6 +56,10 @@ are worth reading before changing the request payload):
   (``promptFeedback.blockReason``) or a ``SAFETY``/``MAX_TOKENS`` finish is
   reported as a disclosed engine failure — never as a decision.
 
+The HTTP transport, payload construction and response extraction live in
+``backend/llm/gemini_client.py`` and are shared with the pipeline's LLM
+assists.
+
 Environment variables. Only ``CAF_MODEL_API_KEY`` is required; the rest
 default to the values below, so pointing the engine at Gemini is a matter of
 supplying one key:
@@ -70,28 +74,23 @@ supplying one key:
 """
 from __future__ import annotations
 
-import asyncio
-import json
-import os
-import re
 import time
 
-import httpx
+import httpx  # noqa: F401 - re-exported so tests can patch llm_engine.httpx.AsyncClient
 
+from backend.llm import gemini_client
+from backend.llm.gemini_client import GeminiCallError, GeminiNotConfigured
 from backend.schemas import InferenceCase, LLMEngineResult, VerifiedQuote
 
-MAX_ATTEMPTS = 2
-REQUEST_TIMEOUT_SECONDS = 20.0
-_RETRY_BACKOFF_SECONDS = 0.5
+# Re-exported for backwards compatibility (tests, scripts and the live check).
+DEFAULT_PROVIDER = gemini_client.DEFAULT_PROVIDER
+DEFAULT_BASE_URL = gemini_client.DEFAULT_BASE_URL
+DEFAULT_MODEL = gemini_client.DEFAULT_MODEL
+MAX_OUTPUT_TOKENS = gemini_client.MAX_OUTPUT_TOKENS
+_extract_json_object = gemini_client.extract_json_object
+_extract_response_text = gemini_client.extract_response_text
 
-DEFAULT_PROVIDER = "gemini"
-DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
-DEFAULT_MODEL = "gemini-3.8-flash"
-
-# Thinking is pinned off so maxOutputTokens caps output only; see the module
-# docstring. 1024 leaves headroom for verbatim policy quotes, which the
-# previous 700-token cap left uncomfortably tight.
-MAX_OUTPUT_TOKENS = 1024
+MAX_ATTEMPTS = gemini_client.MAX_ATTEMPTS
 
 _RESPONSE_SCHEMA: dict = {
     "type": "object",
@@ -122,95 +121,37 @@ _SYSTEM_PROMPT = (
 )
 
 
-class LLMNotConfigured(Exception):
+class LLMNotConfigured(GeminiNotConfigured):
     """Raised when the optional LLM engine has not been configured."""
 
 
 def llm_configured() -> bool:
-    """True once a Gemini API key is present.
-
-    Only ``CAF_MODEL_API_KEY`` gates the engine; provider, base URL, and model
-    all have Gemini defaults so a single key is enough to enable it.
-    """
-    return bool(os.getenv("CAF_MODEL_API_KEY"))
+    """True once a Gemini API key is present (``CAF_MODEL_API_KEY``)."""
+    return gemini_client.gemini_configured()
 
 
 def llm_config_summary() -> dict[str, str | None]:
     """Non-secret configuration details safe to expose via /api/v1/config."""
-    base_url = os.getenv("CAF_MODEL_BASE_URL") or DEFAULT_BASE_URL
-    host = re.sub(r"^https?://", "", base_url).split("/", 1)[0]
-    return {
-        "provider": os.getenv("CAF_MODEL_PROVIDER") or DEFAULT_PROVIDER,
-        "analysis_model": os.getenv("CAF_MODEL_ANALYSIS") or DEFAULT_MODEL,
-        "endpoint_host": host,
-    }
+    return gemini_client.config_summary()
 
 
-def _build_payload(case: InferenceCase) -> dict:
-    user_content = (
+def _user_content(case: InferenceCase) -> str:
+    return (
         f"Diagnosis: {case.diagnosis}\n"
         f"Requested service: {case.requested_service}\n"
         f"Evidence completeness: {case.evidence_state}\n"
         f"Clinical evidence summary: {case.clinical_evidence}\n"
         f"Policy text:\n{case.policy_text}"
     )
-    return {
-        "systemInstruction": {"parts": [{"text": _SYSTEM_PROMPT}]},
-        "contents": [{"role": "user", "parts": [{"text": user_content}]}],
-        "generationConfig": {
-            "temperature": 0,
-            "maxOutputTokens": MAX_OUTPUT_TOKENS,
-            "responseMimeType": "application/json",
-            "responseSchema": _RESPONSE_SCHEMA,
-            "thinkingConfig": {"thinkingBudget": 0},
-        },
-    }
 
 
-def _extract_response_text(payload: dict) -> str:
-    """Pull the model's text out of a Gemini generateContent response.
-
-    Raises ``ValueError`` for every "usable response" failure mode so the
-    caller can record a disclosed error instead of guessing a decision.
-    """
-    block_reason = (payload.get("promptFeedback") or {}).get("blockReason")
-    if block_reason:
-        raise ValueError(f"Gemini withheld the response (blockReason={block_reason}).")
-
-    candidates = payload.get("candidates") or []
-    if not candidates:
-        raise ValueError("Gemini returned no candidates.")
-
-    candidate = candidates[0]
-    finish_reason = candidate.get("finishReason")
-    if finish_reason and finish_reason != "STOP":
-        raise ValueError(f"Gemini stopped early (finishReason={finish_reason}).")
-
-    # Thought parts are not expected (thinkingBudget is 0) but are skipped
-    # defensively rather than fed to the JSON parser.
-    parts = (candidate.get("content") or {}).get("parts") or []
-    text = "".join(
-        part["text"] for part in parts if part.get("text") and not part.get("thought")
+def _build_payload(case: InferenceCase) -> dict:
+    return gemini_client.build_payload(
+        _SYSTEM_PROMPT, _user_content(case), _RESPONSE_SCHEMA, gemini_client.MAX_OUTPUT_TOKENS
     )
-    if not text.strip():
-        raise ValueError("Model returned an empty response.")
-    return text
 
 
-def _extract_json_object(content: str) -> dict:
-    content = content.strip()
-    fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)
-    if fence_match:
-        content = fence_match.group(1)
-    else:
-        brace_match = re.search(r"\{.*\}", content, re.DOTALL)
-        if brace_match:
-            content = brace_match.group(0)
-    return json.loads(content)
-
-
-def _parse_response(content: str, case: InferenceCase) -> tuple[str, float | None, str, list[VerifiedQuote]]:
-    data = _extract_json_object(content)
+def _parse_data(data: dict, case: InferenceCase) -> tuple[str, float | None, str, list[VerifiedQuote]]:
     decision = data["decision"]
     if decision not in ("APPROVE", "DENY", "HUMAN_REVIEW"):
         raise ValueError(f"Model returned an unsupported decision label: {decision!r}")
@@ -218,10 +159,9 @@ def _parse_response(content: str, case: InferenceCase) -> tuple[str, float | Non
     if confidence is not None:
         confidence = max(0.0, min(1.0, float(confidence)))
     rationale = str(data.get("rationale", "")).strip()
-    raw_quotes = data.get("supporting_quotes") or []
     quotes = [
         VerifiedQuote(quote=str(q), verified_in_policy_text=str(q) in case.policy_text)
-        for q in raw_quotes
+        for q in data.get("supporting_quotes") or []
         if str(q).strip()
     ]
     return decision, confidence, rationale, quotes
@@ -235,57 +175,36 @@ async def run_llm_rag_adjudication(case: InferenceCase) -> LLMEngineResult:
     """
     if not llm_configured():
         raise LLMNotConfigured()
-
-    base_url = (os.environ.get("CAF_MODEL_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
-    api_key = os.environ["CAF_MODEL_API_KEY"]
-    model = os.environ.get("CAF_MODEL_ANALYSIS") or DEFAULT_MODEL
-    url = f"{base_url}/models/{model}:generateContent"
+    model = gemini_client.gemini_model()
     started = time.perf_counter()
-    last_error = "unknown error"
-
-    for attempt in range(1, MAX_ATTEMPTS + 1):
-        try:
-            async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
-                response = await client.post(
-                    url,
-                    headers={
-                        "x-goog-api-key": api_key,
-                        "Content-Type": "application/json",
-                    },
-                    json=_build_payload(case),
-                )
-            response.raise_for_status()
-            content = _extract_response_text(response.json())
-            decision, confidence, rationale, quotes = _parse_response(content, case)
-            return LLMEngineResult(
-                engine="llm_rag",
-                model=model,
-                decision=decision,
-                rationale=rationale,
-                confidence=confidence,
-                supporting_quotes=quotes,
-                attempts=attempt,
-                latency_ms=(time.perf_counter() - started) * 1000,
-                error=None,
-            )
-        except httpx.HTTPStatusError as exc:
-            last_error = f"HTTP {exc.response.status_code} from model endpoint."
-        except httpx.HTTPError as exc:
-            last_error = f"Network error contacting model endpoint: {exc}"
-        except (json.JSONDecodeError, KeyError, ValueError) as exc:
-            last_error = f"Could not parse a usable response from the model: {exc}"
-
-        if attempt < MAX_ATTEMPTS:
-            await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
-
+    try:
+        (decision, confidence, rationale, quotes), attempts = await gemini_client.generate_json(
+            _SYSTEM_PROMPT,
+            _user_content(case),
+            _RESPONSE_SCHEMA,
+            lambda data: _parse_data(data, case),
+            max_attempts=MAX_ATTEMPTS,
+        )
+    except GeminiCallError as exc:
+        return LLMEngineResult(
+            engine="llm_rag",
+            model=model,
+            decision=None,
+            rationale="",
+            confidence=None,
+            supporting_quotes=[],
+            attempts=exc.attempts,
+            latency_ms=(time.perf_counter() - started) * 1000,
+            error=f"LLM engine failed after {exc.attempts} attempt(s): {exc}",
+        )
     return LLMEngineResult(
         engine="llm_rag",
         model=model,
-        decision=None,
-        rationale="",
-        confidence=None,
-        supporting_quotes=[],
-        attempts=MAX_ATTEMPTS,
+        decision=decision,
+        rationale=rationale,
+        confidence=confidence,
+        supporting_quotes=quotes,
+        attempts=attempts,
         latency_ms=(time.perf_counter() - started) * 1000,
-        error=f"LLM engine failed after {MAX_ATTEMPTS} attempt(s): {last_error}",
+        error=None,
     )

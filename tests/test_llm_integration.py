@@ -18,6 +18,7 @@ import json
 import pytest
 
 from backend import llm_engine, main, reviews
+from backend.llm import gemini_client
 from backend.schemas import LLMEngineResult
 
 
@@ -42,6 +43,14 @@ def configured_llm_env(monkeypatch):
     )
     monkeypatch.setenv("CAF_MODEL_API_KEY", "test-key-not-real")
     monkeypatch.setenv("CAF_MODEL_ANALYSIS", "gemini-2.5-flash")
+
+    # The pipeline's LLM assists (Agent 1 / Agent 5) also call Gemini when a
+    # key is present; keep the suite hermetic by simulating an unavailable
+    # model, which must fall back to the deterministic output.
+    async def _unavailable(*args, **kwargs):
+        raise gemini_client.GeminiCallError("simulated outage", 1)
+
+    monkeypatch.setattr(gemini_client, "generate_json", _unavailable)
 
 
 def _fake_llm_result(**overrides) -> LLMEngineResult:

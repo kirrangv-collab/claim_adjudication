@@ -1,11 +1,12 @@
 """SQLAlchemy ORM models.
 
-CaseReview is the audit-of-record for every adjudication request: it always
-stores the deterministic prototype's suggestion *and* keeps a separate,
-initially-empty slot for the human reviewer's decision. Nothing in this
-schema allows a prototype suggestion to silently become an authoritative
-outcome — `human_decision` must be explicitly set by an authenticated
-reviewer via the review-workflow endpoints.
+CaseReview is the audit-of-record for every adjudication request. It stores
+the multi-agent pipeline's draft suggestion, its routing decision and the full
+agent trace. A case reaches an authoritative ``final_decision`` in exactly one
+of two audited ways: straight-through processing (high calibrated confidence,
+``decision_source="stp"``, status ``auto_decided``) or an explicit human
+decision recorded by an authenticated reviewer (``decision_source="human"``).
+An admin can reopen either kind.
 """
 from datetime import datetime, timezone
 
@@ -58,6 +59,18 @@ class CaseReview(Base):
     # Null when the engine was not configured at submission time. Always
     # advisory/comparison-only, like `suggested_decision` above.
     llm_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    # Multi-agent pipeline outputs. `route` is Agent 5's routing decision;
+    # `pipeline_trace` stores every agent's artifact for audit/replay.
+    route: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    audit_brief: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pipeline_trace: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    # Authoritative outcome. Set either by straight-through processing
+    # (decision_source="stp", status="auto_decided") or by a human reviewer
+    # (decision_source="human"); null while pending or when escalated.
+    final_decision: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    decision_source: Mapped[str | None] = mapped_column(String(10), nullable=True)
 
     status: Mapped[str] = mapped_column(String(20), default="pending_review")
     created_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"))

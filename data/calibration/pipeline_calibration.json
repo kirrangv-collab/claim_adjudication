@@ -1,0 +1,23 @@
+{
+  "method": "identity",
+  "a": 1.0,
+  "b": 0.0,
+  "n": 16,
+  "cases_scanned": 22,
+  "positives": 16,
+  "negatives": 0,
+  "l2_towards_identity": 1.0,
+  "target": "decisive (APPROVE/DENY) draft equals project-authored ground truth",
+  "fitted_on": "data/processed/ncd_eye_evaluation_cases.jsonl",
+  "fitted_at": "2026-10-25",
+  "metrics": {
+    "draft_accuracy": 1.0,
+    "brier_raw": 0.0008,
+    "brier_calibrated": 0.0008,
+    "ece_raw": 0.0207,
+    "ece_calibrated": 0.0207,
+    "log_loss_raw": 0.0211,
+    "log_loss_leave_one_out": 0.0211
+  },
+  "caveat": "Platt fit skipped: 0 incorrect and 16 correct draft(s); at least 3 of each are required. Raw model scores are reported unchanged. Evaluated on 22 project-labelled research cases (the same sample used by the in-app evaluation). Indicative only; not a statistically meaningful calibration."
+}

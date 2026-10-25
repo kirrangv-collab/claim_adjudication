@@ -1,0 +1,55 @@
+name: Bug report
+description: Something is broken or an adjudication result looks wrong
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. **Do not paste real patient data**; use synthetic cases only.
+        Security problems: please follow SECURITY.md instead of opening an issue.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Adjudication result (pipeline decision, confidence, evidence)
+        - Review queue / login / maker-checker
+        - Web UI
+        - Deployment (Docker, Caddy, deploy scripts)
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you did, what you expected and what you saw instead.
+    validations:
+      required: true
+  - type: textarea
+    id: case
+    attributes:
+      label: Case JSON (for adjudication bugs)
+      description: diagnosis, requested_service, policy_text, clinical_evidence and the decision you expected.
+      render: json
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      render: shell
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      placeholder: e.g. v0.3.0 or a1b2c3d
+  - type: dropdown
+    id: environment
+    attributes:
+      label: How are you running it?
+      options:
+        - Local dev (python -m backend + npm run dev)
+        - deploy/ kit (Docker Compose + Caddy)
+        - Root compose.yaml
+        - Public demo site
+        - Other

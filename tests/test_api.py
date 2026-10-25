@@ -19,25 +19,54 @@ def valid_case(**overrides):
     return case
 
 
-def test_health_and_config_disclose_missing_benchmark(monkeypatch):
+def test_health_and_config_disclose_pipeline_and_missing_benchmark(monkeypatch):
     for var in ("CAF_MODEL_PROVIDER", "CAF_MODEL_BASE_URL", "CAF_MODEL_API_KEY", "CAF_MODEL_ANALYSIS"):
         monkeypatch.delenv(var, raising=False)
-    assert client.get("/api/v1/health").json()["benchmark_available"] is False
+    health = client.get("/api/v1/health").json()
+    assert health["benchmark_available"] is False
+    assert health["knowledge_backends"]["vector_store"] == "memory"
     config = client.get("/api/v1/config").json()
-    assert set(config["unavailable_baselines"]) == {"B1", "B2", "B3"}
+    assert config["model"] == "multi_agent_pipeline"
+    assert config["inference_type"] == "multi_agent_pipeline"
+    assert set(config["unavailable_baselines"]) == {"B2", "B3"}
+    assert config["available_models"] == ["multi_agent_pipeline", "b1_lexical"]
+    assert [a["id"] for a in config["pipeline"]["agents"]] == [
+        "policy_logic", "clinical_evidence", "knowledge_linker", "reconciliation", "confidence_explainability",
+    ]
+    assert config["pipeline"]["stp_thresholds"] == {"APPROVE": 0.9, "DENY": 0.95}
+    assert config["pipeline"]["llm_assist_enabled"] is False
     assert config["llm_enabled"] is False
     assert config["production_ready"] is False
 
 
-def test_adjudication_uses_only_inference_case_and_returns_agent_trace():
+def test_adjudication_uses_only_inference_case_and_returns_five_agent_trace():
     response = client.post("/api/v1/adjudications", json=valid_case())
     assert response.status_code == 200
     result = response.json()
     assert result["decision"] == "APPROVE"
+    assert result["draft_decision"] == "APPROVE"
+    assert result["route"] == "STRAIGHT_THROUGH"
+    assert result["confidence"] >= 0.9
     assert [finding["agent"] for finding in result["findings"]] == [
-        "policy_interpreter", "evidence_assessor", "reconciler"
+        "policy_logic", "clinical_evidence", "knowledge_linker", "reconciliation", "confidence_explainability",
     ]
     assert result["case_id"] == "demo-1"
+    trace = result["pipeline"]
+    assert trace["policy_logic"]["rules"][0]["effect"] == "COVERED"
+    assert "ICD10CM:H40" in {m["concept_id"] for m in trace["clinical_evidence"]["mentions"]}
+    assert set(trace["agent_latency_ms"]) == {
+        "policy_logic", "clinical_evidence", "knowledge_linker", "reconciliation", "confidence_explainability",
+    }
+    assert result["audit_brief"].startswith("# Claim adjudication audit brief")
+    assert result["baseline"]["model"] == "b1_lexical"
+
+
+def test_incomplete_evidence_is_routed_to_human_review_with_reasons():
+    response = client.post("/api/v1/adjudications", json=valid_case(evidence_state="incomplete"))
+    result = response.json()
+    assert result["route"] == "HUMAN_REVIEW_QUEUE"
+    assert result["decision"] == "HUMAN_REVIEW"
+    assert result["pipeline"]["confidence"]["abstention_reasons"]
 
 
 def test_conflict_escalates_to_human_review():
@@ -203,3 +232,53 @@ async def test_streamed_request_body_is_limited_without_content_length():
         send,
     )
     assert sent[0]["status"] == 413
+
+
+def test_lex_specialis_denial_is_never_auto_finalised():
+    response = client.post(
+        "/api/v1/adjudications",
+        json=valid_case(policy_text="Glaucoma imaging is covered but is not covered for glaucoma."),
+    )
+    result = response.json()
+    assert result["draft_decision"] == "DENY"
+    assert result["route"] == "HUMAN_REVIEW_QUEUE"
+    assert any("overrides a satisfied coverage" in r for r in result["pipeline"]["confidence"]["abstention_reasons"])
+
+
+def test_evaluation_engine_selection_and_stp_metrics():
+    body = {"cases": [{"inference_case": valid_case(), "ground_truth": "APPROVE"}]}
+    pipeline = client.post("/api/v1/evaluations", json=body).json()
+    assert pipeline["model"] == "multi_agent_pipeline"
+    assert pipeline["stp_rate"] == 1.0
+    assert pipeline["stp_accuracy"] == 1.0
+    assert pipeline["draft_accuracy"] == 1.0
+    assert pipeline["case_results"][0]["route"] == "STRAIGHT_THROUGH"
+
+    baseline = client.post("/api/v1/evaluations", json={**body, "engine": "b1_lexical"}).json()
+    assert baseline["model"] == "b1_lexical"
+    assert baseline["stp_rate"] is None
+
+
+def test_llm_engine_evaluation_requires_configuration(monkeypatch):
+    monkeypatch.delenv("CAF_MODEL_API_KEY", raising=False)
+    body = {"cases": [{"inference_case": valid_case(), "ground_truth": "APPROVE"}], "engine": "llm_rag"}
+    assert client.post("/api/v1/evaluations", json=body).status_code == 400
+
+
+def test_compare_endpoint_reports_each_engine_and_disagreements(monkeypatch):
+    monkeypatch.delenv("CAF_MODEL_API_KEY", raising=False)
+    cases = [
+        {"inference_case": valid_case(case_id="a"), "ground_truth": "APPROVE"},
+        {
+            "inference_case": valid_case(
+                case_id="b", policy_text="Glaucoma imaging is covered except when the patient has glaucoma."
+            ),
+            "ground_truth": "HUMAN_REVIEW",
+        },
+    ]
+    response = client.post("/api/v1/evaluations/compare", json={"cases": cases, "include_llm": True})
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body["engines"]) == {"multi_agent_pipeline", "b1_lexical"}
+    assert all(e["total_cases"] == 2 for e in body["engines"].values())
+    assert isinstance(body["disagreements"], list)

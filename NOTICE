@@ -1,0 +1,16 @@
+ClaimLab - claim adjudication research prototype
+Copyright 2026 The ClaimLab contributors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Data notices
+------------
+data/processed/ contains unmodified excerpts of the U.S. Centers for Medicare
+& Medicaid Services (CMS) National Coverage Determinations Manual, and
+data/ontology/ contains ICD-10-CM code titles (CMS / CDC NCHS). These are
+U.S. government works in the public domain and are not covered by the
+copyright above. See data/README.md for sources and retrieval details.
+
+All clinical case narratives, test scenarios and ground-truth labels in this
+repository are synthetic and project-authored. They contain no real patient
+data and must not be used for clinical or payment decisions.

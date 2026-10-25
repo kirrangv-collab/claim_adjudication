@@ -1,14 +1,22 @@
+"""B1 lexical baseline adjudicator.
+
+The original deterministic, keyword-based engine of this prototype. It is kept
+as the **B1 baseline** for comparison with the five-agent evidence-
+reconciliation pipeline (``backend/pipeline``), which is now the primary
+engine. Its known failure modes (document-wide qualifier escalation, keyword
+matches in unrelated clauses) are exactly what the pipeline's clause-scoped
+policy ASTs and evidence reconciliation address.
+"""
 import re
 import time
 
 from backend.schemas import AdjudicationResult, AgentFinding, InferenceCase
 
-MODEL_ID = "evidence_reconciliation_prototype"
+MODEL_ID = "b1_lexical"
 LIMITATIONS = [
-    "This deterministic research prototype is not a medical or coverage determination.",
+    "B1 baseline: deterministic keyword matching kept for comparison; not the primary engine.",
     "Text matching is lexical only; it does not establish clinical equivalence or interpret full policy context.",
     "Confidence is a rule-based heuristic, not a calibrated probability.",
-    "The frozen research benchmark and original B1/B2/B3 implementations are not present in this workspace.",
 ]
 
 _STOP_WORDS = {

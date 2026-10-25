@@ -1,12 +1,14 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "claim-adjudication-research-prototype"
-version = "0.1.0"
-description = "Leakage-aware research prototype for evidence-based claim adjudication"
+version = "0.3.0"
+description = "Five-agent evidence-reconciliation claim adjudication research prototype"
 requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 dependencies = [
   "fastapi>=0.115,<1",
   "uvicorn[standard]>=0.30,<1",
@@ -15,14 +17,19 @@ dependencies = [
   "sqlalchemy>=2.0,<3",
   "alembic>=1.13,<2",
   "psycopg[binary]>=3.1,<4",
-"python-multipart>=0.0.9,<1",
-"httpx>=0.27,<1",
+  "python-multipart>=0.0.9,<1",
+  "httpx>=0.27,<1",
   "python-jose[cryptography]>=3.3,<4",
   "bcrypt>=4.1,<6",
+  "numpy>=1.26,<3",
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=8,<9", "pytest-asyncio>=0.24,<2", "httpx>=0.27,<1", "ruff>=0.9,<1"]
+test = ["pytest>=8,<9", "pytest-asyncio>=0.24,<2", "httpx>=0.27,<1", "ruff>=0.9,<1", "qdrant-client>=1.10,<2"]
+# Real knowledge-layer backends (Agent 3): Qdrant vector store + Neo4j graph.
+knowledge = ["qdrant-client>=1.10,<2", "neo4j>=5.20,<6"]
+# SBioBERT embeddings for Agent 2 ICD normalisation (pulls in PyTorch).
+sbiobert = ["sentence-transformers>=3,<6"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

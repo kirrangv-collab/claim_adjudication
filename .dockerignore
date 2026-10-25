@@ -9,3 +9,6 @@ frontend/tsconfig.tsbuildinfo
 data/raw
 data/*.db
 *.py[cod]
+
+deploy/.env
+deploy/backups

@@ -15,20 +15,70 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  qdrant:
+    # Vector store for Agents 2/3 (ontology-term and reference-corpus embeddings).
+    image: qdrant/qdrant:v1.12.4
+    volumes:
+      - claimlab-qdrant-data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+
+  neo4j:
+    # Knowledge graph for Agent 3 (ICD-10-CM is-a hierarchy, treats edges,
+    # policy-section mentions) used for KAMEL valid-ancestor traversal.
+    image: neo4j:5.26-community
+    environment:
+      NEO4J_AUTH: neo4j/${CLAIMLAB_NEO4J_PASSWORD:?Set CLAIMLAB_NEO4J_PASSWORD before running compose}
+      NEO4J_server_memory_heap_max__size: 512m
+    volumes:
+      - claimlab-neo4j-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p \"$${NEO4J_AUTH#neo4j/}\" 'RETURN 1' >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+    security_opt:
+      - no-new-privileges:true
+
   api:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      args:
+        INSTALL_SBIOBERT: ${CLAIMLAB_INSTALL_SBIOBERT:-false}
     depends_on:
       db:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      neo4j:
         condition: service_healthy
     environment:
       CLAIMLAB_ALLOWED_ORIGINS: http://localhost:8080,http://127.0.0.1:8080
       CLAIMLAB_ENVIRONMENT: production
       CLAIMLAB_DATABASE_URL: postgresql+psycopg://claimlab:${CLAIMLAB_DB_PASSWORD:?Set CLAIMLAB_DB_PASSWORD}@db:5432/claimlab
       CLAIMLAB_JWT_SECRET_KEY: ${CLAIMLAB_JWT_SECRET_KEY:?Set CLAIMLAB_JWT_SECRET_KEY to a strong, unique value before running compose}
-      # Optional LLM/RAG comparison engine (Google Gemini). Omit the key to
-      # leave it disabled; the rest default to Gemini 2.5 Flash in code.
+      # Knowledge layer: real Qdrant + Neo4j. If either is unreachable the API
+      # falls back to in-process stores and discloses it via /api/v1/config.
+      CLAIMLAB_VECTOR_BACKEND: qdrant
+      CLAIMLAB_QDRANT_URL: http://qdrant:6333
+      CLAIMLAB_GRAPH_BACKEND: neo4j
+      CLAIMLAB_NEO4J_URI: bolt://neo4j:7687
+      CLAIMLAB_NEO4J_USER: neo4j
+      CLAIMLAB_NEO4J_PASSWORD: ${CLAIMLAB_NEO4J_PASSWORD:?Set CLAIMLAB_NEO4J_PASSWORD}
+      # hashing (default, no model download) or sbiobert (requires
+      # CLAIMLAB_INSTALL_SBIOBERT=true at build time).
+      CLAIMLAB_EMBEDDER: ${CLAIMLAB_EMBEDDER:-hashing}
+      # STP routing thresholds (Agent 5).
+      CLAIMLAB_STP_APPROVE_THRESHOLD: ${CLAIMLAB_STP_APPROVE_THRESHOLD:-0.90}
+      CLAIMLAB_STP_DENY_THRESHOLD: ${CLAIMLAB_STP_DENY_THRESHOLD:-0.95}
+      # Optional Gemini: assists Agent 1/Agent 5 and powers the LLM/RAG
+      # comparison engine. Omit the key to leave all LLM features disabled.
       CAF_MODEL_API_KEY: ${CAF_MODEL_API_KEY:-}
       CAF_MODEL_ANALYSIS: ${CAF_MODEL_ANALYSIS:-gemini-3.8-flash}
     ports:
@@ -62,3 +112,5 @@ services:
 
 volumes:
   claimlab-db-data:
+  claimlab-qdrant-data:
+  claimlab-neo4j-data:

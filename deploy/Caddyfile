@@ -1,0 +1,13 @@
+# Caddy reverse proxy with automatic HTTPS (Let's Encrypt / ZeroSSL).
+# DOMAIN comes from deploy/.env. Use DOMAIN=localhost for a local test:
+# Caddy then serves a locally-trusted self-signed certificate.
+{$DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		-Server
+	}
+
+	reverse_proxy web:8080
+}

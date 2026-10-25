@@ -9,6 +9,7 @@ configured via environment variables.
 import pytest
 
 from backend import llm_engine
+from backend.llm import gemini_client
 from backend.schemas import InferenceCase
 
 pytestmark = pytest.mark.asyncio
@@ -89,7 +90,7 @@ def _configured_env(monkeypatch):
     )
     monkeypatch.setenv("CAF_MODEL_API_KEY", "test-key-not-real")
     monkeypatch.setenv("CAF_MODEL_ANALYSIS", "gemini-2.5-flash")
-    monkeypatch.setattr(llm_engine, "_RETRY_BACKOFF_SECONDS", 0)
+    monkeypatch.setattr(gemini_client, "RETRY_BACKOFF_SECONDS", 0)
 
 
 def _queue_responses(monkeypatch, *responses):

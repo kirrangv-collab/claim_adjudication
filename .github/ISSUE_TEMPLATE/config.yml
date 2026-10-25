@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/kirrangv-collab/claim_adjudication/security/advisories/new
+    about: Please report security problems privately, not as public issues.
+  - name: Testing guide
+    url: https://github.com/kirrangv-collab/claim_adjudication/blob/main/testing_guide.md
+    about: How to run and interpret the 51-scenario test suite.

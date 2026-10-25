@@ -3,18 +3,27 @@ import os
 import time
 from uuid import UUID, uuid4
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.concurrency import run_in_threadpool
 
-from backend.agents import MODEL_ID, adjudicate
+from backend.agents import MODEL_ID as B1_MODEL_ID
 from backend.auth import router as auth_router
 from backend.config import get_settings
-from backend.evaluation import evaluate
+from backend.evaluation import compare, evaluate, evaluate_llm
+from backend.knowledge import get_knowledge_base
 from backend.llm_engine import (
     LLMNotConfigured,
     llm_config_summary,
     llm_configured,
     run_llm_rag_adjudication,
+)
+from backend.pipeline.confidence import load_calibration
+from backend.pipeline.orchestrator import (
+    AGENTS,
+    MODEL_ID,
+    PIPELINE_VERSION,
+    adjudicate_pipeline_async,
 )
 from backend.rate_limit import RateLimitMiddleware
 from backend.reviews import router as reviews_router
@@ -22,10 +31,16 @@ from backend.sample_data import load_sample_cases, load_source_provenance
 from backend.schemas import (
     AdjudicationResult,
     ConfigResponse,
+    EvaluationCompareRequest,
+    EvaluationComparisonResponse,
     EvaluationRequest,
     EvaluationResponse,
     HealthResponse,
     InferenceCase,
+    PipelineAgentInfo,
+    PipelineConfig,
+    PublicDemoAccount,
+    PublicDemoInfo,
     SampleCasesResponse,
 )
 
@@ -34,13 +49,14 @@ settings.require_non_default_secret()
 
 app = FastAPI(
     title="Claim Adjudication Research Prototype",
-    version="0.2.0",
+    version="0.3.0",
     description=(
-        "Leakage-aware research demonstration with a production-grade "
-        "engineering layer (auth, persistence, audited human review). "
-        "Adjudication content is still not clinically or legally validated "
-        "and must not be used as the sole basis for a real coverage "
-        "determination."
+        "Five-agent evidence-reconciliation adjudication pipeline (policy logic, "
+        "clinical evidence, knowledge linking, reconciliation, calibrated "
+        "confidence) with straight-through processing for high-confidence "
+        "decisions and an audited human review queue for everything else. "
+        "Adjudication content is not clinically or legally validated and must "
+        "not be used as the sole basis for a real coverage determination."
     ),
     docs_url="/docs" if settings.docs_enabled else None,
     redoc_url="/redoc" if settings.docs_enabled else None,
@@ -173,9 +189,23 @@ app.include_router(reviews_router)
 
 @app.get("/api/v1/health", response_model=HealthResponse)
 def health() -> HealthResponse:
+    kb = get_knowledge_base()
     return HealthResponse(
         status="ok", service="claim-adjudication-api", prototype=True,
-        benchmark_available=False,
+        benchmark_available=False, pipeline_ready=True, knowledge_backends=kb.status,
+    )
+
+
+def _public_demo_info() -> PublicDemoInfo | None:
+    if not (settings.public_demo and settings.demo_password):
+        return None
+    return PublicDemoInfo(
+        accounts=[
+            PublicDemoAccount(username="demo-maker", role="reviewer"),
+            PublicDemoAccount(username="demo-checker", role="reviewer"),
+        ],
+        password=settings.demo_password,
+        notice=settings.demo_notice,
     )
 
 
@@ -183,16 +213,29 @@ def health() -> HealthResponse:
 def config() -> ConfigResponse:
     llm_enabled = llm_configured()
     llm_summary = llm_config_summary() if llm_enabled else {}
+    kb = get_knowledge_base()
+    calibration = load_calibration()
     return ConfigResponse(
         model=MODEL_ID,
-        inference_type="deterministic_rules",
+        inference_type="multi_agent_pipeline",
+        pipeline=PipelineConfig(
+            version=PIPELINE_VERSION,
+            agents=[PipelineAgentInfo(id=agent_id, name=name) for agent_id, name in AGENTS],
+            stp_enabled=settings.stp_enabled,
+            stp_thresholds={"APPROVE": settings.stp_approve_threshold, "DENY": settings.stp_deny_threshold},
+            llm_assist_enabled=llm_enabled and settings.pipeline_llm_assist,
+            knowledge_backends=kb.status,
+            knowledge_fallbacks=kb.fallbacks,
+            calibration=dict(calibration),
+        ),
+        public_demo=_public_demo_info(),
         llm_enabled=llm_enabled,
         llm_provider=llm_summary.get("provider"),
         llm_analysis_model=llm_summary.get("analysis_model"),
         llm_endpoint_host=llm_summary.get("endpoint_host"),
         llm_role=(
-            "Secondary comparison signal only; never overrides the "
-            "deterministic decision and is not itself authoritative."
+            "Assists Agent 1 (clause parsing) and Agent 5 (audit-brief prose) with validated output, and runs a "
+            "separate side-by-side comparison engine. Never decides on its own."
             if llm_enabled else None
         ),
         environment=settings.environment,
@@ -200,11 +243,10 @@ def config() -> ConfigResponse:
         audit_trail_enabled=True,
         production_ready=False,
         clinically_validated=False,
-        available_models=[MODEL_ID],
+        available_models=[MODEL_ID, B1_MODEL_ID] + (["llm_rag"] if llm_enabled else []),
         unavailable_baselines={
-            "B1": "Original implementation is not present in this workspace.",
-            "B2": "Original implementation is not present in this workspace.",
-            "B3": "Original implementation is not present; an independent LLM/RAG comparison engine is available instead when configured.",
+            "B2": "The original KAMEL-inspired baseline is not present; KAMEL valid-ancestor linking is implemented inside Agent 3 instead.",
+            "B3": "The original implementation is not present; an independent LLM/RAG comparison engine is available when configured.",
         },
         supported_decisions=["APPROVE", "DENY", "HUMAN_REVIEW"],
         benchmark_available=False,
@@ -213,8 +255,9 @@ def config() -> ConfigResponse:
 
 @app.post("/api/v1/adjudications", response_model=AdjudicationResult)
 async def create_adjudication(case: InferenceCase) -> AdjudicationResult:
-    result = adjudicate(case)
-    if llm_configured():
+    llm_enabled = llm_configured()
+    result = await adjudicate_pipeline_async(case, llm_assist=llm_enabled and settings.pipeline_llm_assist)
+    if llm_enabled:
         try:
             llm_result = await run_llm_rag_adjudication(case)
         except LLMNotConfigured:
@@ -224,8 +267,23 @@ async def create_adjudication(case: InferenceCase) -> AdjudicationResult:
 
 
 @app.post("/api/v1/evaluations", response_model=EvaluationResponse)
-def create_evaluation(request: EvaluationRequest) -> EvaluationResponse:
-    return evaluate(request)
+async def create_evaluation(request: EvaluationRequest) -> EvaluationResponse:
+    if request.engine == "llm_rag":
+        if not llm_configured():
+            raise HTTPException(status_code=400, detail="The llm_rag engine is not configured on this server.")
+        return await evaluate_llm(request)
+    return await run_in_threadpool(evaluate, request)
+
+
+@app.post("/api/v1/evaluations/compare", response_model=EvaluationComparisonResponse)
+async def compare_engines(request: EvaluationCompareRequest) -> EvaluationComparisonResponse:
+    responses = {
+        engine: await run_in_threadpool(evaluate, EvaluationRequest(cases=request.cases, engine=engine))
+        for engine in ("multi_agent_pipeline", "b1_lexical")
+    }
+    if request.include_llm and llm_configured():
+        responses["llm_rag"] = await evaluate_llm(EvaluationRequest(cases=request.cases, engine="llm_rag"))
+    return compare(responses)
 
 
 @app.get("/api/v1/sample-cases", response_model=SampleCasesResponse)

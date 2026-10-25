@@ -1,0 +1,165 @@
+# ClaimLab production stack for a single Linux server.
+# Step-by-step guide: deploy/README.md
+#
+#   Internet ──► caddy (HTTPS, :80/:443) ──► web (nginx: SPA + /api proxy) ──► api ──► db (PostgreSQL)
+#                                                                               └──► qdrant + neo4j  (profile "full")
+#
+# Only Caddy publishes ports. Configure with deploy/.env (create it with
+# `bash deploy/configure.sh`), then from the deploy/ directory:
+#   docker compose up -d --build
+name: claimlab
+
+x-hardened: &hardened
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  caddy:
+    <<: *hardened
+    image: caddy:2.8-alpine
+    depends_on:
+      web:
+        condition: service_healthy
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+      - "${HTTPS_PORT:-443}:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN in deploy/.env (run deploy/configure.sh)}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+
+  web:
+    <<: *hardened
+    build:
+      context: ..
+      dockerfile: frontend/Dockerfile
+    image: ${WEB_IMAGE:-claimlab-web:local}
+    depends_on:
+      api:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:uid=101,gid=101,mode=0755
+      - /var/run:uid=101,gid=101,mode=0755
+      - /tmp:uid=101,gid=101,mode=1777
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:8080/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    cap_drop:
+      - ALL
+
+  api:
+    <<: *hardened
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+      args:
+        INSTALL_SBIOBERT: ${INSTALL_SBIOBERT:-false}
+    image: ${API_IMAGE:-claimlab-api:local}
+    depends_on:
+      db:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+        required: false
+      neo4j:
+        condition: service_healthy
+        required: false
+    environment:
+      CLAIMLAB_ENVIRONMENT: production
+      CLAIMLAB_ALLOWED_ORIGINS: https://${DOMAIN}
+      CLAIMLAB_DATABASE_URL: postgresql+psycopg://claimlab:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@db:5432/claimlab
+      CLAIMLAB_JWT_SECRET_KEY: ${JWT_SECRET:?Set JWT_SECRET}
+      CLAIMLAB_RATE_LIMIT_REQUESTS: ${RATE_LIMIT_REQUESTS:-60}
+      # Trust X-Forwarded-For only from the internal network (Caddy + nginx),
+      # so rate limiting sees each visitor's real IP and cannot be spoofed.
+      FORWARDED_ALLOW_IPS: ${INTERNAL_SUBNET:-172.30.0.0/24}
+      CLAIMLAB_EMBEDDER: ${CLAIMLAB_EMBEDDER:-hashing}
+      CLAIMLAB_VECTOR_BACKEND: ${CLAIMLAB_VECTOR_BACKEND:-memory}
+      CLAIMLAB_QDRANT_URL: http://qdrant:6333
+      CLAIMLAB_GRAPH_BACKEND: ${CLAIMLAB_GRAPH_BACKEND:-memory}
+      CLAIMLAB_NEO4J_URI: bolt://neo4j:7687
+      CLAIMLAB_NEO4J_USER: neo4j
+      CLAIMLAB_NEO4J_PASSWORD: ${NEO4J_PASSWORD:-}
+      CLAIMLAB_STP_APPROVE_THRESHOLD: ${STP_APPROVE_THRESHOLD:-0.90}
+      CLAIMLAB_STP_DENY_THRESHOLD: ${STP_DENY_THRESHOLD:-0.95}
+      CLAIMLAB_PUBLIC_DEMO: ${CLAIMLAB_PUBLIC_DEMO:-false}
+      CLAIMLAB_DEMO_PASSWORD: ${CLAIMLAB_DEMO_PASSWORD:-}
+      CAF_MODEL_API_KEY: ${CAF_MODEL_API_KEY:-}
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+
+  db:
+    <<: *hardened
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: claimlab
+      POSTGRES_USER: claimlab
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U claimlab -d claimlab"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  qdrant:
+    <<: *hardened
+    profiles: ["full"]
+    image: qdrant/qdrant:v1.12.4
+    volumes:
+      - qdrant-data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  neo4j:
+    <<: *hardened
+    profiles: ["full"]
+    image: neo4j:5.26-community
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-}
+      NEO4J_server_memory_heap_initial__size: 256m
+      NEO4J_server_memory_heap_max__size: 512m
+      NEO4J_server_memory_pagecache_size: 256m
+    volumes:
+      - neo4j-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p \"$${NEO4J_AUTH#neo4j/}\" 'RETURN 1' >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${INTERNAL_SUBNET:-172.30.0.0/24}
+
+volumes:
+  caddy-data:
+  caddy-config:
+  db-data:
+  qdrant-data:
+  neo4j-data:

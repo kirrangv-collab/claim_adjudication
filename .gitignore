@@ -13,3 +13,7 @@ data/*.db-journal
 data/*.pem
 ci-migration-check.db
 .env
+
+# Deployment secrets and backups
+deploy/.env
+deploy/backups/

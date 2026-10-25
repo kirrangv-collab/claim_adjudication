@@ -1,10 +1,23 @@
 import { useState } from "react";
-import { CircleAlert, HeartPulse, LoaderCircle, Lock, ShieldCheck, User } from "lucide-react";
+import { CircleAlert, FlaskConical, HeartPulse, LoaderCircle, Lock, ShieldCheck, User } from "lucide-react";
+
+export type PublicDemo = {
+  accounts: { username: string; role: string }[];
+  password: string;
+  notice: string;
+};
+
+const DEMO_ROLE_HINT: Record<string, string> = {
+  "demo-maker": "submits cases",
+  "demo-checker": "records decisions",
+};
 
 export function LoginScreen({
   onLogin,
+  demo,
 }: {
   onLogin: (username: string, password: string) => Promise<void>;
+  demo?: PublicDemo | null;
 }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -18,7 +31,11 @@ export function LoginScreen({
     try {
       await onLogin(username, password);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to sign in.");
+      setError(
+        cause instanceof TypeError
+          ? "Could not reach the API. Check that the backend is running and reachable, then try again."
+          : cause instanceof Error ? cause.message : "Unable to sign in.",
+      );
     } finally {
       setBusy(false);
     }
@@ -33,6 +50,25 @@ export function LoginScreen({
         </div>
         <h1>Reviewer sign-in</h1>
         <p>Accounts are provisioned by an administrator. Self-registration is disabled by design.</p>
+
+        {demo && (
+          <div className="demo-login">
+            <div className="demo-login-heading"><FlaskConical size={14} /> Public demo — try it without an account</div>
+            <div className="demo-login-accounts">
+              {demo.accounts.map((account) => (
+                <button
+                  key={account.username}
+                  type="button"
+                  className="button secondary"
+                  onClick={() => { setUsername(account.username); setPassword(demo.password); setError(""); }}
+                >
+                  Use <b>{account.username}</b> <small>({DEMO_ROLE_HINT[account.username] ?? account.role})</small>
+                </button>
+              ))}
+            </div>
+            <small>Password for both: <code>{demo.password}</code>. {demo.notice}</small>
+          </div>
+        )}
 
         {error && <div className="error-banner" role="alert"><CircleAlert size={16} /><span>{error}</span></div>}
 
@@ -65,7 +101,7 @@ export function LoginScreen({
           </button>
         </form>
 
-        <div className="login-footer"><ShieldCheck size={13} /> Research prototype — every adjudication requires independent human sign-off.</div>
+        <div className="login-footer"><ShieldCheck size={13} /> Research prototype — only high-confidence cases are auto-finalised; all others require independent human sign-off.</div>
       </div>
     </div>
   );
