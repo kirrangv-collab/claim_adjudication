@@ -125,7 +125,7 @@ services:
   qdrant:
     <<: *hardened
     profiles: ["full"]
-    image: qdrant/qdrant:v1.12.4
+    image: qdrant/qdrant:v1.20.0
     volumes:
       - qdrant-data:/qdrant/storage
     healthcheck:
