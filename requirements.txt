@@ -14,5 +14,5 @@ pytest>=8,<9
 pytest-asyncio>=0.24,<2
 # Optional knowledge-layer backends (see README "Knowledge layer"):
 qdrant-client>=1.10,<2
-neo4j>=5.20,<6
+neo4j>=5.20,<7
 # sentence-transformers>=3,<6   # SBioBERT embeddings; large (PyTorch) - install explicitly
