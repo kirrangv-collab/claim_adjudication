@@ -28,7 +28,7 @@ jobs:
           - name: claimlab-web
             dockerfile: frontend/Dockerfile
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Lower-case image name
         id: image
         run: echo "ref=ghcr.io/${OWNER,,}/${{ matrix.name }}" >> "$GITHUB_OUTPUT"
