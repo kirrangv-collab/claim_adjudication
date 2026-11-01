@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.15-slim
 
 # Set INSTALL_SBIOBERT=true to bake SBioBERT (sentence-transformers + PyTorch)
 # into the image for CLAIMLAB_EMBEDDER=sbiobert. Off by default: large image.
